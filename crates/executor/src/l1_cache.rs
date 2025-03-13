@@ -1,0 +1,673 @@
+//! Cache and execution state management for the RISC-V emulator.
+//!
+//! This module implements a 2-way set-associative L1 cache with LRU replacement
+//! policy, along with the core execution state tracking for the emulator.
+
+use serde::{Deserialize, Serialize};
+
+use crate::{events::MemoryRecord, Memory};
+
+/// A cache line in the L1 cache, representing a block of memory.
+///
+/// Each cache line contains:
+/// - A tag for address matching
+/// - An array of memory records (the actual cached data)
+/// - An LRU counter for replacement decisions
+/// - A valid bit indicating if the line contains valid data
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CacheLine {
+    /// Tag bits for address matching
+    tag: u32,
+    /// Cached memory records in this line
+    data: [MemoryRecord; Self::LINE_SIZE],
+    /// LRU counter for replacement policy
+    lru: u8,
+    /// Whether this cache line contains valid data
+    valid: bool,
+}
+
+impl CacheLine {
+    /// Number of memory records in each cache line
+    const LINE_SIZE: usize = 32;
+
+    /// Creates a new empty cache line
+    #[allow(unused)]
+    pub fn new() -> Self {
+        Self {
+            valid: false,
+            tag: 0,
+            data: [MemoryRecord::default(); Self::LINE_SIZE],
+            lru: 0,
+        }
+    }
+
+    /// Creates a new cache line by loading data from memory
+    ///
+    /// # Arguments
+    /// * `tag` - Tag bits for the cache line
+    /// * `cacheline_addr` - Base address of the cache line in memory
+    /// * `lru` - Initial LRU counter value
+    /// * `memory` - Memory to load data from
+    fn from_memory(tag: u32, cacheline_addr: u32, memory: &mut Memory) -> Self {
+        let valid = true;
+        let lru = 0;
+        let mut data = [MemoryRecord::default(); Self::LINE_SIZE];
+        for offset in 0..Self::LINE_SIZE {
+            let addr = cacheline_addr | offset as u32;
+            let record = memory.get(&addr).cloned().unwrap_or_default();
+            data[offset] = record;
+        }
+        Self {
+            valid,
+            tag,
+            data,
+            lru,
+        }
+    }
+}
+
+/// L1 cache implementation with 2-way set-associative mapping
+///
+/// The cache is organized as:
+/// - 256 sets (indexed by address bits [5:13])
+/// - 2 ways per set (managed by LRU replacement)
+/// - 32 words per cache line
+///
+/// This structure provides efficient memory access through caching while
+/// maintaining consistency with main memory through write-back policy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct L1Cache {
+    /// Cache data organized as sets of cache lines
+    cache: Vec<Vec<CacheLine>>,
+    // /// Tag to set mapping for quick lookups
+    // tag_set: HashMap<u32, u32>,
+}
+
+impl Default for L1Cache {
+    /// Creates a default L1 cache instance
+    ///
+    /// Delegates to `new()` to create a properly initialized cache
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl L1Cache {
+    /// Number of cache sets
+    const SETS: usize = 256;
+    /// Number of ways (associativity) per set
+    const WAYS: usize = 2;
+
+    /// Creates a new empty L1 cache with pre-allocated sets and ways
+    ///
+    /// # Returns
+    /// A new L1Cache instance with SETS × WAYS empty cache lines
+    pub fn new() -> Self {
+        let cache = vec![vec![CacheLine::default(); Self::WAYS]; Self::SETS];
+        Self {
+            cache,
+            // tag_set: HashMap::new(),
+        }
+    }
+
+    #[inline(always)]
+    /// Looks up a memory address in the cache
+    ///
+    /// This function checks both ways in the set-associative cache for a matching tag.
+    /// If found, returns a mutable reference to the corresponding memory record.
+    ///
+    /// # Arguments
+    /// * `addr` - Memory address to look up
+    ///
+    /// # Returns
+    /// * `Some(&mut MemoryRecord)` if the address is in cache
+    /// * `None` if the address is not in cache (cache miss)
+    pub fn lookup(&mut self, addr: u32) -> Option<&mut MemoryRecord> {
+        let set: usize = calculate_set(addr);
+        let tag = calculate_tag(addr);
+
+        let set_lines = unsafe { self.cache.get_unchecked_mut(set) };
+
+        // TODO multiway
+        if set_lines[0].valid && set_lines[0].tag == tag {
+            set_lines[0].lru += 1;
+            let offset = calculate_offset(addr);
+            return Some(&mut set_lines[0].data[offset]);
+        }
+
+        if set_lines[1].valid && set_lines[1].tag == tag {
+            set_lines[1].lru += 1;
+            let offset = calculate_offset(addr);
+            return Some(&mut set_lines[1].data[offset]);
+        }
+        None
+    }
+
+    #[inline(always)]
+    /// Inserts a new cache line for the given address
+    ///
+    /// Uses LRU (Least Recently Used) replacement policy to choose which way to evict
+    /// when both ways in a set are occupied. The evicted line is written back to memory
+    /// if it contains valid data.
+    ///
+    /// # Arguments
+    /// * `addr` - Memory address to cache
+    /// * `memory` - Memory to load data from
+    pub fn insert(&mut self, addr: u32, memory: &mut Memory) {
+        let set = calculate_set(addr);
+        let tag = calculate_tag(addr);
+        println!("Using set {} tag {:b} for addr {:b}", set, tag, addr);
+
+        let aligned_addr = addr & !(CacheLine::LINE_SIZE - 1) as u32;
+
+        let set_lines = unsafe { self.cache.get_unchecked_mut(set) };
+
+        // TODO watch out re-insertion
+        println!(
+            "LRU: {} {} {}",
+            set_lines[0].lru, set_lines[1].lru, set_lines[1].valid
+        );
+        let cache_line = if set_lines[0].lru <= set_lines[1].lru && !set_lines[0].valid {
+            &mut set_lines[0]
+        } else {
+            &mut set_lines[1]
+        };
+
+        store_cacheline_if_needed(set, cache_line, memory);
+        *cache_line = CacheLine::from_memory(tag, aligned_addr, memory);
+    }
+}
+
+/// Writes back a cache line to memory if it contains valid data
+///
+/// This function is called before evicting a cache line to ensure modified data
+/// is not lost. It writes each memory record in the cache line back to its
+/// corresponding memory address.
+///
+/// # Arguments
+/// * `set` - Cache set index
+/// * `cache_line` - Cache line to write back
+/// * `memory` - Memory to write data to
+fn store_cacheline_if_needed(set: usize, cache_line: &CacheLine, memory: &mut Memory) {
+    if cache_line.valid {
+        let tag = cache_line.tag;
+        let cacheline_addr = calculate_cacheline_addr(tag, set);
+        println!(
+            "store_cacheline_if_needed for set {} and tag {:b} and addr {:b}",
+            set, cache_line.tag, cacheline_addr
+        );
+        for (offset, record) in cache_line.data.iter().enumerate() {
+            memory.insert(cacheline_addr | offset as u32, *record);
+        }
+    }
+}
+
+/// Calculates the cache set index from a memory address
+///
+/// Extracts bits [5:13] from the address to determine which set to use.
+/// With 256 sets, we need 8 bits for the set index.
+///
+/// # Arguments
+/// * `addr` - Memory address to calculate set index for
+///
+/// # Returns
+/// Set index in range [0, 255]
+#[inline(always)]
+pub fn calculate_set(addr: u32) -> usize {
+    ((addr >> 5) & 0xFF) as usize
+}
+
+/// Takes the upper bits [14:31] of the address as the tag.
+/// These bits are used to check if a cache line contains the desired address.
+#[inline(always)]
+pub fn calculate_tag(addr: u32) -> u32 {
+    addr >> 14
+}
+
+#[inline(always)]
+/// Calculates the offset within a cache line from a memory address
+///
+/// Uses bits [0:4] of the address to determine the position within a cache line.
+/// With 32 words per line, we need 5 bits for the offset.
+/// Offset in range [0, 31]
+pub fn calculate_offset(addr: u32) -> usize {
+    (addr & 0x1F) as usize
+}
+
+/// Reconstructs the base memory address of a cache line from its tag and set
+///
+/// Combines the tag (upper bits) and set index (middle bits) to form the
+/// base address of a cache line. The offset bits are set to 0.
+#[inline(always)]
+pub fn calculate_cacheline_addr(tag: u32, set: usize) -> u32 {
+    tag << 14 | (set << 5) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper function to create addresses that map to the same cache set
+    fn create_same_set_addresses(base: u32, count: u32) -> Vec<u32> {
+        (0..count).map(|i| base + (i << 14)).collect()
+    }
+
+    #[test]
+    fn test_cacheline_new() {
+        let line = CacheLine::new();
+        assert!(!line.valid);
+        assert_eq!(line.tag, 0);
+        assert_eq!(line.lru, 0);
+        assert_eq!(line.data.len(), CacheLine::LINE_SIZE);
+    }
+
+    #[test]
+    fn test_cacheline_from_memory() {
+        let mut memory = Memory::new();
+        let addr = 0x1000;
+        let tag = calculate_tag(addr);
+        let record = MemoryRecord {
+            shard: 42,
+            timestamp: 42,
+            value: 42,
+        };
+        memory.insert(addr, record);
+
+        let line = CacheLine::from_memory(tag, addr, &mut memory);
+        assert!(line.valid);
+        assert_eq!(line.tag, tag);
+        assert_eq!(line.lru, 0);
+        assert_eq!(line.data[0], record);
+        assert_eq!(line.data[1], MemoryRecord::default());
+    }
+
+    #[test]
+    fn test_l1cache_new() {
+        let cache = L1Cache::new();
+        assert_eq!(cache.cache.len(), L1Cache::SETS);
+        for set in &cache.cache {
+            assert_eq!(set.len(), L1Cache::WAYS);
+        }
+        // assert!(cache.tag_set.is_empty());
+    }
+
+    #[test]
+    fn test_cache_to_memory_sync() {
+        let mut cache = L1Cache::new();
+        let mut memory = Memory::new();
+
+        // Insert initial value
+        let addr = 0x1000;
+
+        memory.insert(addr, MemoryRecord::default());
+        cache.insert(addr, &mut memory);
+
+        let evicting_addr = addr + (1 << 14); // Different tag, same set
+        let record = MemoryRecord {
+            shard: 42,
+            timestamp: 42,
+            value: 42,
+        };
+        memory.insert(evicting_addr, record);
+        cache.insert(evicting_addr, &mut memory);
+
+        // Modify cached value
+        if let Some(cached) = cache.lookup(evicting_addr) {
+            cached.value = 100;
+        }
+
+        // Force writeback by inserting to same set
+        let another_evicting_addr = addr + (2 << 14); // Different tag, same set
+        cache.insert(another_evicting_addr, &mut memory);
+
+        // Verify written back value
+        assert_eq!(
+            memory.get(&evicting_addr).unwrap().value,
+            100,
+            "Modified value not written back"
+        );
+    }
+
+    #[test]
+    fn test_cache_address_calculations() {
+        let addr = 0x12345678;
+        let set = calculate_set(addr);
+        let tag = calculate_tag(addr);
+        let offset = calculate_offset(addr);
+
+        // Verify set is within bounds
+        assert!(set < L1Cache::SETS);
+
+        // Verify offset is within bounds
+        assert!(offset < CacheLine::LINE_SIZE);
+
+        // Verify we can reconstruct the address (ignoring offset)
+        let base_addr = calculate_cacheline_addr(tag, set);
+        assert_eq!(addr & !0x1F, base_addr);
+    }
+
+    #[test]
+    fn test_l1cache_lookup_miss() {
+        let mut cache = L1Cache::new();
+        let addr = 0x1000;
+        assert!(cache.lookup(addr).is_none());
+    }
+
+    #[test]
+    fn test_l1cache_sequential_access() {
+        let mut cache = L1Cache::new();
+        let mut memory = Memory::new();
+
+        // Create sequential addresses in the same cache line
+        let base_addr = 0x1000;
+        let values = [1, 2, 3, 4];
+
+        // Insert values into memory
+        for (i, &val) in values.iter().enumerate() {
+            let addr = base_addr + (i as u32);
+            let mut record = MemoryRecord::default();
+            record.value = val;
+            memory.insert(addr, record);
+        }
+
+        // Insert first address - should load entire cache line
+        cache.insert(base_addr, &mut memory);
+
+        // Verify all addresses in the cache line are cached
+        for (i, &val) in values.iter().enumerate() {
+            let addr = base_addr + (i as u32);
+            let record = cache.lookup(addr).expect("Address should be cached");
+            assert_eq!(record.value, val, "Cached value mismatch");
+        }
+    }
+
+    #[test]
+    fn test_l1cache_insert_and_lookup() {
+        let mut cache = L1Cache::new();
+        let mut memory = Memory::new();
+        let addr = 0x1000;
+        // WIP
+        let value = MemoryRecord::default();
+        memory.insert(addr, value);
+
+        // Insert into cache
+        cache.insert(addr, &mut memory);
+
+        // Verify lookup succeeds
+        let result = cache.lookup(addr);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_cache_boundary_addresses() {
+        let mut cache = L1Cache::new();
+        let mut memory = Memory::new();
+
+        // Test cache line boundary addresses
+        let addr1 = 0x1F; // Last offset in a cache line
+        let addr2 = 0x20; // First offset in next cache line
+        let addr3 = 0x1FE0; // Last offset in a set
+        let addr4 = 0x2000; // First offset in next set
+
+        for addr in [addr1, addr2, addr3, addr4] {
+            memory.insert(addr, MemoryRecord::default());
+            cache.insert(addr, &mut memory);
+            assert!(
+                cache.lookup(addr).is_some(),
+                "Failed to cache address {:#x}",
+                addr
+            );
+        }
+
+        // Verify address calculations at boundaries
+        assert_eq!(calculate_offset(addr1), 0x1F);
+        assert_eq!(calculate_offset(addr2), 0x0);
+        assert_eq!(calculate_set(addr3), 0xFF);
+        assert_eq!(calculate_set(addr4), 0x0);
+    }
+
+    #[test]
+    fn test_cache_aliasing() {
+        let mut cache = L1Cache::new();
+        let mut memory = Memory::new();
+
+        // Create two addresses that map to the same cache set and offset
+        let addr1 = 0x1000;
+        let addr2 = addr1 + (1 << 14); // Same set, different tag
+
+        // Insert first address
+        let record1 = MemoryRecord {
+            shard: 42,
+            timestamp: 42,
+            value: 42,
+        };
+        memory.insert(addr1, record1);
+        cache.insert(addr1, &mut memory);
+
+        // Insert second address
+        let record2 = MemoryRecord {
+            shard: 84,
+            timestamp: 84,
+            value: 84,
+        };
+        memory.insert(addr2, record2);
+        cache.insert(addr2, &mut memory);
+
+        // Both should be in cache (2-way set associative)
+        let cached1 = cache.lookup(addr1).expect("First address should be cached");
+        assert_eq!(*cached1, record1);
+        let cached2 = cache
+            .lookup(addr2)
+            .expect("Second address should be cached");
+        assert_eq!(*cached2, record2);
+    }
+
+    #[test]
+    fn test_cache_capacity() {
+        let mut cache = L1Cache::new();
+        let mut memory = Memory::new();
+        let mut record = MemoryRecord::default();
+        record.value = 42;
+
+        // Try to fill entire cache
+        let mut hits = 0;
+        for set in 0..L1Cache::SETS {
+            for way in 0..L1Cache::WAYS {
+                let addr = ((set << 5) | (way << 14)) as u32;
+                memory.insert(addr, record);
+                cache.insert(addr, &mut memory);
+                if cache.lookup(addr).is_some() {
+                    hits += 1;
+                }
+            }
+        }
+
+        // Verify we could use full cache capacity
+        assert_eq!(
+            hits,
+            L1Cache::SETS * L1Cache::WAYS,
+            "Cache not utilizing full capacity"
+        );
+    }
+
+    #[test]
+    fn test_cache_uninitialized_memory() {
+        let mut cache = L1Cache::new();
+        let mut memory = Memory::new();
+
+        // Try to cache an address that doesn't exist in memory
+        let addr = 0x1000;
+        cache.insert(addr, &mut memory);
+
+        // Should still create a cache line with default values
+        assert!(
+            cache.lookup(addr).is_some(),
+            "Address should be cached with default values"
+        );
+    }
+
+    #[test]
+    fn test_cache_concurrent_access_pattern() {
+        let mut cache = L1Cache::new();
+        let mut memory = Memory::new();
+
+        // Create interleaved access pattern across different sets
+        let addrs = [
+            0x1000, // Set 0x80
+            0x2000, // Set 0x100
+            0x1020, // Set 0x81
+            0x2020, // Set 0x101
+        ];
+
+        // Initialize memory
+        for &addr in &addrs {
+            memory.insert(addr, MemoryRecord::default());
+        }
+
+        // Access in interleaved pattern
+        for &addr in &addrs {
+            cache.insert(addr, &mut memory);
+        }
+
+        // Verify all addresses still cached
+        for &addr in &addrs {
+            assert!(
+                cache.lookup(addr).is_some(),
+                "Address should be cached {:#x}",
+                addr
+            );
+        }
+    }
+
+    #[test]
+    fn test_cache_line_modification() {
+        let mut cache = L1Cache::new();
+        let mut memory = Memory::new();
+
+        // Set up first cache line in the set
+        let base_addr = 0x1000; // Set 0x80
+        let record = MemoryRecord::default();
+        memory.insert(base_addr, record);
+        cache.insert(base_addr, &mut memory);
+
+        // Verify first cache hit
+        assert!(
+            cache.lookup(base_addr).is_some(),
+            "First address should be cached"
+        );
+
+        // Add second address to same set
+        let second_addr = base_addr + (1 << 14); // Same set, different tag
+        memory.insert(second_addr, record);
+        cache.insert(second_addr, &mut memory);
+
+        // Both addresses should still be cached (2-way set associative)
+        assert!(
+            cache.lookup(base_addr).is_some(),
+            "First address should still be cached"
+        );
+        assert!(
+            cache.lookup(second_addr).is_some(),
+            "Second address should be cached"
+        );
+
+        // Access first address to update its LRU counter
+        cache.lookup(base_addr);
+
+        // Add third address to same set - should evict second address (LRU)
+        let third_addr = second_addr + (1 << 14); // Same set, different tag
+        memory.insert(third_addr, record);
+        cache.insert(third_addr, &mut memory);
+
+        // First and third addresses should be cached, second should be evicted
+        assert!(
+            cache.lookup(base_addr).is_some(),
+            "First address should still be cached"
+        );
+        assert!(
+            cache.lookup(second_addr).is_none(),
+            "Second address should have been evicted"
+        );
+        assert!(
+            cache.lookup(third_addr).is_some(),
+            "Third address should be cached"
+        );
+    }
+
+    #[test]
+    fn test_cache_memory_consistency() {
+        let mut cache = L1Cache::new();
+        let mut memory = Memory::new();
+
+        // Create a sequence of addresses that will map to the same cache set
+        let addrs = create_same_set_addresses(0x1000, L1Cache::WAYS as u32 + 1);
+
+        // Insert initial values into memory
+        for &addr in &addrs {
+            memory.insert(addr, MemoryRecord::default());
+        }
+
+        // Insert all addresses into cache
+        for &addr in &addrs {
+            cache.insert(addr, &mut memory);
+        }
+
+        // Last address should have evicted the first one due to LRU policy
+        assert!(
+            cache.lookup(addrs[0]).is_some(),
+            "First address should still be cached"
+        );
+        assert!(
+            cache.lookup(addrs[2]).is_some(),
+            "2nd address should still has been evicted"
+        );
+        assert!(
+            cache.lookup(addrs[2]).is_some(),
+            "3d address should still be cached"
+        );
+
+        // Verify memory consistency after eviction
+        assert!(
+            memory.contains_key(&addrs[0]),
+            "Evicted address should still be in memory"
+        );
+    }
+
+    #[test]
+    fn test_l1cache_lru_replacement() {
+        let mut cache = L1Cache::new();
+        let mut memory = Memory::new();
+
+        // Create three addresses that map to the same set
+        let addrs = create_same_set_addresses(0x1000, 3);
+
+        // Insert values for all addresses
+        for &addr in &addrs {
+            memory.insert(addr, MemoryRecord::default());
+        }
+
+        // Insert first two addresses
+        cache.insert(addrs[0], &mut memory);
+        cache.insert(addrs[1], &mut memory);
+
+        // Access first address to make it MRU
+        assert!(cache.lookup(addrs[0]).is_some());
+
+        // Insert third address - should evict second address (LRU)
+        cache.insert(addrs[2], &mut memory);
+
+        // Verify first and third addresses are in cache
+        assert!(
+            cache.lookup(addrs[1]).is_none(),
+            "LRU entry was not evicted"
+        );
+        assert!(
+            cache.lookup(addrs[0]).is_some(),
+            "MRU entry was incorrectly evicted"
+        );
+        assert!(
+            cache.lookup(addrs[2]).is_some(),
+            "Newly inserted entry not found"
+        );
+    }
+}

@@ -6,7 +6,13 @@ use std::{
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 
-use crate::{events::MemoryRecord, syscalls::SyscallCode, ExecutorMode, Register};
+use crate::{events::MemoryRecord, l1_cache::L1Cache, syscalls::SyscallCode, ExecutorMode, Register};
+
+/// Type alias for the main memory storage
+///
+/// Maps 32-bit memory addresses to their corresponding memory records.
+/// This represents the backing store that the L1 cache operates over.
+pub type Memory = HashMap<u32, MemoryRecord>;
 
 /// Holds data describing the current state of a program's execution.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -20,7 +26,10 @@ pub struct ExecutionState {
 
     /// The memory which instructions operate over. Values contain the memory value and last shard
     /// + timestamp that each memory address was accessed.
-    pub memory: HashMap<u32, MemoryRecord>,
+    pub memory: Memory,
+
+    /// L1 cache.
+    pub l1_cache: L1Cache,
 
     /// Registers file which instructions operate over.
     pub register_file: [MemoryRecord; Register::number_of_registers()],
@@ -75,6 +84,7 @@ impl ExecutionState {
             proof_stream_ptr: 0,
             syscall_counts: HashMap::new(),
             register_file: [MemoryRecord::default(); Register::number_of_registers()],
+            l1_cache: L1Cache::default(),
         }
     }
 }
