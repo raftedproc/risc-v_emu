@@ -12,7 +12,8 @@ use thiserror::Error;
 use crate::{
     context::SP1Context,
     events::{
-        create_alu_lookup_id, LookupId, MemoryAccessPosition, MemoryLocalEvent, MemoryReadRecord, MemoryRecord, MemoryWriteRecord
+        create_alu_lookup_id, LookupId, MemoryAccessPosition, MemoryLocalEvent, MemoryReadRecord,
+        MemoryRecord, MemoryWriteRecord,
     },
     hook::{HookEnv, HookRegistry},
     state::{ExecutionState, ForkState},
@@ -239,9 +240,17 @@ impl<'a> Executor<'a> {
     }
 
     /// Store a value into a register.
-    pub fn store_register(&mut self, register: Register, value: u32, position: MemoryAccessPosition) {
-        let memory_record =
-        MemoryRecord { value, shard: self.shard(), timestamp: self.timestamp(&position) };
+    pub fn store_register(
+        &mut self,
+        register: Register,
+        value: u32,
+        position: MemoryAccessPosition,
+    ) {
+        let memory_record = MemoryRecord {
+            value,
+            shard: self.shard(),
+            timestamp: self.timestamp(&position),
+        };
         let register_idx = register as usize;
         self.state.register_file[register_idx] = memory_record;
     }
@@ -301,32 +310,32 @@ impl<'a> Executor<'a> {
     ) -> MemoryReadRecord {
         // Get the memory record entry.
         let entry = self.state.memory.entry(addr);
-        if self.executor_mode == ExecutorMode::Checkpoint || self.unconstrained {
-            match entry {
-                Entry::Occupied(ref entry) => {
-                    let record = entry.get();
-                    self.memory_checkpoint
-                        .entry(addr)
-                        .or_insert_with(|| Some(*record));
-                }
-                Entry::Vacant(_) => {
-                    self.memory_checkpoint.entry(addr).or_insert(None);
-                }
-            }
-        }
+        // if self.executor_mode == ExecutorMode::Checkpoint || self.unconstrained {
+        //     match entry {
+        //         Entry::Occupied(ref entry) => {
+        //             let record = entry.get();
+        //             self.memory_checkpoint
+        //                 .entry(addr)
+        //                 .or_insert_with(|| Some(*record));
+        //         }
+        //         Entry::Vacant(_) => {
+        //             self.memory_checkpoint.entry(addr).or_insert(None);
+        //         }
+        //     }
+        // }
 
         // If we're in unconstrained mode, we don't want to modify state, so we'll save the
         // original state if it's the first time modifying it.
-        if self.unconstrained {
-            let record = match entry {
-                Entry::Occupied(ref entry) => Some(entry.get()),
-                Entry::Vacant(_) => None,
-            };
-            self.unconstrained_state
-                .memory_diff
-                .entry(addr)
-                .or_insert(record.copied());
-        }
+        // if self.unconstrained {
+        //     let record = match entry {
+        //         Entry::Occupied(ref entry) => Some(entry.get()),
+        //         Entry::Vacant(_) => None,
+        //     };
+        //     self.unconstrained_state
+        //         .memory_diff
+        //         .entry(addr)
+        //         .or_insert(record.copied());
+        // }
 
         // If it's the first time accessing this address, initialize previous values.
         let record: &mut MemoryRecord = match entry {
@@ -349,24 +358,24 @@ impl<'a> Executor<'a> {
         record.shard = shard;
         record.timestamp = timestamp;
 
-        if !self.unconstrained {
-            let local_memory_access = if let Some(local_memory_access) = local_memory_access {
-                local_memory_access
-            } else {
-                &mut self.local_memory_access
-            };
+        // if !self.unconstrained {
+        //     let local_memory_access = if let Some(local_memory_access) = local_memory_access {
+        //         local_memory_access
+        //     } else {
+        //         &mut self.local_memory_access
+        //     };
 
-            local_memory_access
-                .entry(addr)
-                .and_modify(|e| {
-                    e.final_mem_access = *record;
-                })
-                .or_insert(MemoryLocalEvent {
-                    addr,
-                    initial_mem_access: prev_record,
-                    final_mem_access: *record,
-                });
-        }
+        //     local_memory_access
+        //         .entry(addr)
+        //         .and_modify(|e| {
+        //             e.final_mem_access = *record;
+        //         })
+        //         .or_insert(MemoryLocalEvent {
+        //             addr,
+        //             initial_mem_access: prev_record,
+        //             final_mem_access: *record,
+        //         });
+        // }
 
         // Construct the memory read record.
         MemoryReadRecord::new(
@@ -578,17 +587,16 @@ impl<'a> Executor<'a> {
 
     /// Execute the given instruction over the current state of the runtime.
     #[allow(clippy::too_many_lines)]
-    fn execute_instruction(&mut self, instruction: &Instruction, rng: &mut Rand) -> Result<(), ExecutionError> {
+    fn execute_instruction(
+        &mut self,
+        instruction: &Instruction,
+        rng: &mut Rand,
+    ) -> Result<(), ExecutionError> {
         let mut next_pc = self.state.pc.wrapping_add(4);
 
         let rd: Register;
         let (a, b, c): (u32, u32, u32);
         let (addr, memory_read_value): (u32, u32);
-
-        let in_trace_mode = self.executor_mode == ExecutorMode::Trace;
-        if in_trace_mode {
-            // self.memory_accesses = MemoryAccessRecord::default();
-        }
 
         match instruction.opcode {
             // Arithmetic instructions.
@@ -957,7 +965,7 @@ impl<'a> Executor<'a> {
     /// Executes one cycle of the program, returning whether the program has finished.
     #[inline]
     #[allow(clippy::too_many_lines)]
-    fn execute_cycle(&mut self, rng: &mut Rand) -> Result<bool, ExecutionError> {
+    fn execute_cycle(&mut self, done_inv: u32, rng: &mut Rand) -> Result<bool, ExecutionError> {
         // Fetch the instruction at the current program counter.
         let instruction = self.fetch();
 
@@ -966,21 +974,13 @@ impl<'a> Executor<'a> {
         self.log(&instruction);
 
         // Execute the instruction.
-        self.execute_instruction(&instruction,  rng)?;
+        self.execute_instruction(&instruction, rng)?;
 
         // Increment the clock.
         self.state.global_clk += 1;
 
-        // If the cycle limit is exceeded, return an error.
-        if let Some(max_cycles) = self.max_cycles {
-            if self.state.global_clk >= max_cycles {
-                return Err(ExecutionError::ExceededCycleLimit(max_cycles));
-            }
-        }
-
-        let done = self.state.pc == 0
-            || self.state.pc.wrapping_sub(self.program.pc_base)
-                >= (self.program.instructions.len() * 4) as u32;
+        let done =
+            self.state.pc == 0 || self.state.pc.wrapping_sub(self.program.pc_base) >= done_inv;
         if done && self.unconstrained {
             log::error!(
                 "program ended in unconstrained mode at clk {}",
@@ -1097,12 +1097,13 @@ impl<'a> Executor<'a> {
         }
 
         let mut rng = Rand::new();
+        let done_inv = (self.program.instructions.len() * 4) as u32;
 
         // Loop until we've executed `self.shard_batch_size` shards if `self.shard_batch_size` is
         // set.
         let done;
         loop {
-            if self.execute_cycle(&mut rng)? {
+            if self.execute_cycle(done_inv, &mut rng)? {
                 done = true;
                 break;
             }
