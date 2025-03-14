@@ -261,12 +261,12 @@ impl<'a> Executor<'a> {
     pub fn word(&mut self, addr: u32) -> u32 {
         #[allow(clippy::single_match_else)]
 
-        println!("word addr: {:?}", addr);
+        //println!("word addr: {:?}", addr);
 
         let record = if env::var("CACHE").is_ok() {
-            let cached_record = self.state.l1_cache.lookup(addr);
+            let cached_record = self.state.l1_cache.lookup_no_ts_update(addr);
             let record = if cached_record.is_none() {
-                self.state.l1_cache.insert(addr, &mut self.state.memory);
+                self.state.l1_cache.insert(addr, &mut self.state.memory, &self.state.uninitialized_memory);
                 self.state.memory.get(&addr)
             } else {
                 cached_record
@@ -289,7 +289,7 @@ impl<'a> Executor<'a> {
             }
         }
 
-        println!("word record: {:?}", record);
+        //println!("word record: {:?}", record);
         match record {
             Some(record) => record.value,
             None => 0,
@@ -325,12 +325,11 @@ impl<'a> Executor<'a> {
         local_memory_access: Option<&mut HashMap<u32, MemoryLocalEvent>>,
     ) -> MemoryReadRecord {
         // Get the memory record entry.
-        println!("mr addr: {:?}", addr);
+        //println!("mr addr: {:?}", addr);
 
         let record = if env::var("CACHE").is_ok() {
-            let cached_word = self.state.l1_cache.lookup_mut(addr);
+            let cached_word = self.state.l1_cache.lookup_mut(addr, timestamp);
             let record = if cached_word.is_none() {
-                self.state.l1_cache.insert(addr, &mut self.state.memory);
                 let entry = self.state.memory.entry(addr);
                 match entry {
                     Entry::Occupied(entry) => entry.into_mut(),
@@ -346,11 +345,14 @@ impl<'a> Executor<'a> {
                             timestamp: 0,
                         })
                     }
-                }
+                };
+                self.state.l1_cache.insert(addr, &mut self.state.memory, &self.state.uninitialized_memory);
+                // WIP
+                self.state.memory.get_mut(&addr).expect("There must be a valid MemoryRecord for the word")
             } else {
                 let cached_word = cached_word.expect("There must be a valid MemoryRecord for the word");
                 if env::var("PRINT_CACHED").is_ok() {
-                    println!("mr cached_word: {:?}", cached_word);
+                    //println!("mr cached_word: {:?} timestamp: {:?}", cached_word, timestamp);
                 }
                 cached_word
             };
@@ -376,7 +378,7 @@ impl<'a> Executor<'a> {
             record
         };
 
-        println!("mr record: {:?}", record);
+        //println!("mr record: {:?}", record);
         // let record = if cached_word.is_none() {
         //     self.state.l1_cache.insert(addr, &mut self.state.memory);
         //     let entry = self.state.memory.entry(addr);
@@ -505,11 +507,11 @@ impl<'a> Executor<'a> {
         local_memory_access: Option<&mut HashMap<u32, MemoryLocalEvent>>,
     ) -> MemoryWriteRecord {
         // Get the memory record entry.
-        println!("mw addr: {:?}", addr);
+        //println!("mw addr: {:?}", addr);
         let record = if env::var("CACHE").is_ok() { 
-            let cached_word = self.state.l1_cache.lookup_mut(addr);
+            let cached_word = self.state.l1_cache.lookup_mut(addr, timestamp);
             if env::var("PRINT_CACHED").is_ok() {
-                println!("mw cached_word: {:?}", cached_word);
+                //println!("mw cached_word: {:?}", cached_word);
             }
             let record = if cached_word.is_none() {
                 let entry = self.state.memory.entry(addr);
@@ -761,7 +763,7 @@ impl<'a> Executor<'a> {
         instruction: &Instruction,
         rng: &mut Rand,
     ) -> Result<(), ExecutionError> {
-        println!("Executing instruction: {:?}", instruction);
+        //println!("Executing instruction: {:?}", instruction);
         let mut next_pc = self.state.pc.wrapping_add(4);
 
         let rd: Register;

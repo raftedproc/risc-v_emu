@@ -14,6 +14,9 @@ use crate::{events::MemoryRecord, l1_cache::L1Cache, syscalls::SyscallCode, Exec
 /// This represents the backing store that the L1 cache operates over.
 pub type Memory = HashMap<u32, MemoryRecord>;
 
+/// TODO
+pub type UnInitMemory = HashMap<u32, u32>;
+
 /// Holds data describing the current state of a program's execution.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[repr(C)]
@@ -43,7 +46,7 @@ pub struct ExecutionState {
 
     /// Uninitialized memory addresses that have a specific value they should be initialized with.
     /// `SyscallHintRead` uses this to write hint data into uninitialized memory.
-    pub uninitialized_memory: HashMap<u32, u32>,
+    pub uninitialized_memory: UnInitMemory,
 
     /// A stream of input values (global to the entire program).
     pub input_stream: Vec<Vec<u8>>,
