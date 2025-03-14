@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
 };
 
+use frand::Rand;
 use hashbrown::{hash_map::Entry, HashMap};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -11,8 +12,7 @@ use thiserror::Error;
 use crate::{
     context::SP1Context,
     events::{
-        create_alu_lookup_id, LookupId, MemoryAccessPosition, MemoryLocalEvent, MemoryReadRecord,
-        MemoryRecord, MemoryWriteRecord,
+        create_alu_lookup_id, LookupId, MemoryAccessPosition, MemoryLocalEvent, MemoryReadRecord, MemoryRecord, MemoryWriteRecord
     },
     hook::{HookEnv, HookRegistry},
     state::{ExecutionState, ForkState},
@@ -578,75 +578,76 @@ impl<'a> Executor<'a> {
 
     /// Execute the given instruction over the current state of the runtime.
     #[allow(clippy::too_many_lines)]
-    fn execute_instruction(&mut self, instruction: &Instruction) -> Result<(), ExecutionError> {
+    fn execute_instruction(&mut self, instruction: &Instruction, rng: &mut Rand) -> Result<(), ExecutionError> {
         let mut next_pc = self.state.pc.wrapping_add(4);
 
         let rd: Register;
         let (a, b, c): (u32, u32, u32);
         let (addr, memory_read_value): (u32, u32);
 
-        if self.executor_mode == ExecutorMode::Trace {
+        let in_trace_mode = self.executor_mode == ExecutorMode::Trace;
+        if in_trace_mode {
             // self.memory_accesses = MemoryAccessRecord::default();
         }
-        let lookup_id = if self.executor_mode == ExecutorMode::Trace {
-            create_alu_lookup_id()
-        } else {
-            LookupId::default()
-        };
-        let syscall_lookup_id = if self.executor_mode == ExecutorMode::Trace {
-            create_alu_lookup_id()
-        } else {
-            LookupId::default()
-        };
 
         match instruction.opcode {
             // Arithmetic instructions.
             Opcode::ADD => {
+                let lookup_id = create_alu_lookup_id(rng);
                 (rd, b, c) = self.alu_rr(instruction);
                 a = b.wrapping_add(c);
                 self.alu_rw(instruction, rd, a, b, c, lookup_id);
             }
             Opcode::SUB => {
+                let lookup_id = create_alu_lookup_id(rng);
                 (rd, b, c) = self.alu_rr(instruction);
                 a = b.wrapping_sub(c);
                 self.alu_rw(instruction, rd, a, b, c, lookup_id);
             }
             Opcode::XOR => {
+                let lookup_id = create_alu_lookup_id(rng);
                 (rd, b, c) = self.alu_rr(instruction);
                 a = b ^ c;
                 self.alu_rw(instruction, rd, a, b, c, lookup_id);
             }
             Opcode::OR => {
+                let lookup_id = create_alu_lookup_id(rng);
                 (rd, b, c) = self.alu_rr(instruction);
                 a = b | c;
                 self.alu_rw(instruction, rd, a, b, c, lookup_id);
             }
             Opcode::AND => {
+                let lookup_id = create_alu_lookup_id(rng);
                 (rd, b, c) = self.alu_rr(instruction);
                 a = b & c;
                 self.alu_rw(instruction, rd, a, b, c, lookup_id);
             }
             Opcode::SLL => {
+                let lookup_id = create_alu_lookup_id(rng);
                 (rd, b, c) = self.alu_rr(instruction);
                 a = b.wrapping_shl(c);
                 self.alu_rw(instruction, rd, a, b, c, lookup_id);
             }
             Opcode::SRL => {
+                let lookup_id = create_alu_lookup_id(rng);
                 (rd, b, c) = self.alu_rr(instruction);
                 a = b.wrapping_shr(c);
                 self.alu_rw(instruction, rd, a, b, c, lookup_id);
             }
             Opcode::SRA => {
+                let lookup_id = create_alu_lookup_id(rng);
                 (rd, b, c) = self.alu_rr(instruction);
                 a = (b as i32).wrapping_shr(c) as u32;
                 self.alu_rw(instruction, rd, a, b, c, lookup_id);
             }
             Opcode::SLT => {
+                let lookup_id = create_alu_lookup_id(rng);
                 (rd, b, c) = self.alu_rr(instruction);
                 a = if (b as i32) < (c as i32) { 1 } else { 0 };
                 self.alu_rw(instruction, rd, a, b, c, lookup_id);
             }
             Opcode::SLTU => {
+                let lookup_id = create_alu_lookup_id(rng);
                 (rd, b, c) = self.alu_rr(instruction);
                 a = if b < c { 1 } else { 0 };
                 self.alu_rw(instruction, rd, a, b, c, lookup_id);
@@ -829,6 +830,7 @@ impl<'a> Executor<'a> {
                     .or_insert(0);
                 *syscall_count += 1;
 
+                let syscall_lookup_id = create_alu_lookup_id(rng);
                 let syscall_impl = self.get_syscall(syscall).cloned();
                 if syscall.should_send() != 0 {
                     // self.emit_syscall(clk, syscall.syscall_id(), b, c, syscall_lookup_id);
@@ -873,26 +875,31 @@ impl<'a> Executor<'a> {
 
             // Multiply instructions.
             Opcode::MUL => {
+                let lookup_id = create_alu_lookup_id(rng);
                 (rd, b, c) = self.alu_rr(instruction);
                 a = b.wrapping_mul(c);
                 self.alu_rw(instruction, rd, a, b, c, lookup_id);
             }
             Opcode::MULH => {
+                let lookup_id = create_alu_lookup_id(rng);
                 (rd, b, c) = self.alu_rr(instruction);
                 a = (((b as i32) as i64).wrapping_mul((c as i32) as i64) >> 32) as u32;
                 self.alu_rw(instruction, rd, a, b, c, lookup_id);
             }
             Opcode::MULHU => {
+                let lookup_id = create_alu_lookup_id(rng);
                 (rd, b, c) = self.alu_rr(instruction);
                 a = ((b as u64).wrapping_mul(c as u64) >> 32) as u32;
                 self.alu_rw(instruction, rd, a, b, c, lookup_id);
             }
             Opcode::MULHSU => {
+                let lookup_id = create_alu_lookup_id(rng);
                 (rd, b, c) = self.alu_rr(instruction);
                 a = (((b as i32) as i64).wrapping_mul(c as i64) >> 32) as u32;
                 self.alu_rw(instruction, rd, a, b, c, lookup_id);
             }
             Opcode::DIV => {
+                let lookup_id = create_alu_lookup_id(rng);
                 (rd, b, c) = self.alu_rr(instruction);
                 if c == 0 {
                     a = u32::MAX;
@@ -902,6 +909,7 @@ impl<'a> Executor<'a> {
                 self.alu_rw(instruction, rd, a, b, c, lookup_id);
             }
             Opcode::DIVU => {
+                let lookup_id = create_alu_lookup_id(rng);
                 (rd, b, c) = self.alu_rr(instruction);
                 if c == 0 {
                     a = u32::MAX;
@@ -911,6 +919,7 @@ impl<'a> Executor<'a> {
                 self.alu_rw(instruction, rd, a, b, c, lookup_id);
             }
             Opcode::REM => {
+                let lookup_id = create_alu_lookup_id(rng);
                 (rd, b, c) = self.alu_rr(instruction);
                 if c == 0 {
                     a = b;
@@ -920,6 +929,7 @@ impl<'a> Executor<'a> {
                 self.alu_rw(instruction, rd, a, b, c, lookup_id);
             }
             Opcode::REMU => {
+                let lookup_id = create_alu_lookup_id(rng);
                 (rd, b, c) = self.alu_rr(instruction);
                 if c == 0 {
                     a = b;
@@ -947,7 +957,7 @@ impl<'a> Executor<'a> {
     /// Executes one cycle of the program, returning whether the program has finished.
     #[inline]
     #[allow(clippy::too_many_lines)]
-    fn execute_cycle(&mut self) -> Result<bool, ExecutionError> {
+    fn execute_cycle(&mut self, rng: &mut Rand) -> Result<bool, ExecutionError> {
         // Fetch the instruction at the current program counter.
         let instruction = self.fetch();
 
@@ -956,7 +966,7 @@ impl<'a> Executor<'a> {
         self.log(&instruction);
 
         // Execute the instruction.
-        self.execute_instruction(&instruction)?;
+        self.execute_instruction(&instruction,  rng)?;
 
         // Increment the clock.
         self.state.global_clk += 1;
@@ -1086,11 +1096,13 @@ impl<'a> Executor<'a> {
             self.initialize();
         }
 
+        let mut rng = Rand::new();
+
         // Loop until we've executed `self.shard_batch_size` shards if `self.shard_batch_size` is
         // set.
         let done;
         loop {
-            if self.execute_cycle()? {
+            if self.execute_cycle(&mut rng)? {
                 done = true;
                 break;
             }

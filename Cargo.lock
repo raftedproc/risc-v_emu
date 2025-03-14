@@ -767,6 +767,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a0d2fde1f7b3d48b8395d5f2de76c18a528bd6a9cdde438df747bfcba3e05d6f"
 
 [[package]]
+name = "frand"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0632aefca5b3940174bbea720a111b3ec3433a67852ab737299565c3ce2d32b4"
+dependencies = [
+ "glam",
+ "rand_core",
+]
+
+[[package]]
 name = "funty"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -821,6 +831,12 @@ dependencies = [
  "wasi 0.13.3+wasi-0.2.2",
  "windows-targets",
 ]
+
+[[package]]
+name = "glam"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17fcdf9683c406c2fc4d124afd29c0d595e22210d633cbdb8695ba9935ab1dc6"
 
 [[package]]
 name = "gmp-mpfr-sys"
@@ -1770,6 +1786,7 @@ dependencies = [
  "elf",
  "enum-map",
  "eyre",
+ "frand",
  "hashbrown 0.14.5",
  "hex",
  "itertools 0.13.0",

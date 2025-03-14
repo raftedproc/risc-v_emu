@@ -1,3 +1,4 @@
+use frand::Rand;
 use serde::Deserialize;
 use serde::Serialize;
 use std::{
@@ -24,9 +25,7 @@ pub struct LookupId {
 }
 
 /// Creates a new ALU lookup id with ``LookupId``
-#[must_use]
-pub fn create_alu_lookup_id() -> LookupId {
-    let mut rng = thread_rng();
+pub fn create_alu_lookup_id(rng: &mut Rand) -> LookupId {
     LookupId {
         a: rng.gen(),
         b: rng.gen(),
@@ -34,6 +33,7 @@ pub fn create_alu_lookup_id() -> LookupId {
         d: rng.gen(),
     }
 }
+
 
 /// Creates a new ALU lookup id with ``LookupId``
 #[must_use]
