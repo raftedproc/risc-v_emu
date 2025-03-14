@@ -223,34 +223,11 @@ impl<'a> Executor<'a> {
     }
 
     /// Get the current values of the registers.
-    #[allow(clippy::single_match_else)]
     #[must_use]
     pub fn registers(&mut self) -> [u32; 32] {
         let mut registers = [0; 32];
         for i in 0..32 {
-            let addr = Register::from_u32(i as u32) as u32;
-            let record = self.state.memory.get(&addr);
-
-            // Only add the previous memory state to checkpoint map if we're in checkpoint mode,
-            // or if we're in unconstrained mode. In unconstrained mode, the mode is always
-            // Simple.
-            if self.executor_mode == ExecutorMode::Checkpoint || self.unconstrained {
-                match record {
-                    Some(record) => {
-                        self.memory_checkpoint
-                            .entry(addr)
-                            .or_insert_with(|| Some(*record));
-                    }
-                    None => {
-                        self.memory_checkpoint.entry(addr).or_insert(None);
-                    }
-                }
-            }
-
-            registers[i] = match record {
-                Some(record) => record.value,
-                None => 0,
-            };
+            registers[i] = self.state.register_file[i].value;
         }
         registers
     }
@@ -258,26 +235,15 @@ impl<'a> Executor<'a> {
     /// Get the current value of a register.
     #[must_use]
     pub fn register(&mut self, register: Register) -> u32 {
-        let addr = register as u32;
-        let record = self.state.memory.get(&addr);
+        self.state.register_file[register as usize].value
+    }
 
-        if self.executor_mode == ExecutorMode::Checkpoint || self.unconstrained {
-            match record {
-                Some(record) => {
-                    self.memory_checkpoint
-                        .entry(addr)
-                        .or_insert_with(|| Some(*record));
-                }
-                None => {
-                    self.memory_checkpoint.entry(addr).or_insert(None);
-                }
-            }
-        }
-
-        match record {
-            Some(record) => record.value,
-            None => 0,
-        }
+    /// Store a value into a register.
+    pub fn store_register(&mut self, register: Register, value: u32, position: MemoryAccessPosition) {
+        let memory_record =
+        MemoryRecord { value, shard: self.shard(), timestamp: self.timestamp(&position) };
+        let register_idx = register as usize;
+        self.state.register_file[register_idx] = memory_record;
     }
 
     /// Get the current value of a word.
@@ -529,8 +495,8 @@ impl<'a> Executor<'a> {
     }
 
     /// Read from a register.
-    pub fn rr(&mut self, register: Register, position: MemoryAccessPosition) -> u32 {
-        self.mr_cpu(register as u32, position)
+    pub fn rr(&mut self, register: Register, _position: MemoryAccessPosition) -> u32 {
+        self.register(register)
     }
 
     /// Write to a register.
@@ -539,9 +505,11 @@ impl<'a> Executor<'a> {
         // Register %x0 should always be 0. See 2.6 Load and Store Instruction on
         // P.18 of the RISC-V spec. We always write 0 to %x0.
         if register == Register::X0 {
-            self.mw_cpu(register as u32, 0, MemoryAccessPosition::A);
+            // self.mw_cpu(register as u32, 0, MemoryAccessPosition::A);
+            self.store_register(register, 0, MemoryAccessPosition::A);
         } else {
-            self.mw_cpu(register as u32, value, MemoryAccessPosition::A);
+            // self.mw_cpu(register as u32, value, MemoryAccessPosition::A);
+            self.store_register(register, value, MemoryAccessPosition::A);
         }
     }
 

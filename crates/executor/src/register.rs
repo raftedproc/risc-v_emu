@@ -114,4 +114,10 @@ impl Register {
             _ => panic!("invalid register {value}"),
         }
     }
+
+    /// This function supplies register to idx mapping.
+    #[must_use]
+    pub const fn number_of_registers() -> usize {
+        Self::X31 as usize + 1
+    }
 }

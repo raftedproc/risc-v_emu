@@ -6,7 +6,7 @@ use std::{
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 
-use crate::{events::MemoryRecord, syscalls::SyscallCode, ExecutorMode};
+use crate::{events::MemoryRecord, syscalls::SyscallCode, ExecutorMode, Register};
 
 /// Holds data describing the current state of a program's execution.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -21,6 +21,9 @@ pub struct ExecutionState {
     /// The memory which instructions operate over. Values contain the memory value and last shard
     /// + timestamp that each memory address was accessed.
     pub memory: HashMap<u32, MemoryRecord>,
+
+    /// Registers file which instructions operate over.
+    pub register_file: [MemoryRecord; Register::number_of_registers()],
 
     /// The global clock keeps track of how many instructions have been executed through all shards.
     pub global_clk: u64,
@@ -71,6 +74,7 @@ impl ExecutionState {
             public_values_stream_ptr: 0,
             proof_stream_ptr: 0,
             syscall_counts: HashMap::new(),
+            register_file: [MemoryRecord::default(); Register::number_of_registers()],
         }
     }
 }

@@ -12,3 +12,4 @@ categories = { workspace = true }
 [dependencies]
 alloy-primitives = "0.8.5"
 sp1-core-executor = { workspace = true }
+generic-array = "=1.1.0"

@@ -21,6 +21,7 @@ fn main() {
         
         // Setup the executor.
         let mut executor = Executor::new(Program::from(program).unwrap());
+
         executor.write_stdin_slice(buffer);
 
         // Run the executor.
