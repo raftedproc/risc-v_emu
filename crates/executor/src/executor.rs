@@ -1,4 +1,5 @@
 use std::{
+    env,
     fs::File,
     io::{BufWriter, Write},
     sync::Arc,
@@ -259,7 +260,21 @@ impl<'a> Executor<'a> {
     #[must_use]
     pub fn word(&mut self, addr: u32) -> u32 {
         #[allow(clippy::single_match_else)]
-        let record = self.state.memory.get(&addr);
+
+        println!("word addr: {:?}", addr);
+
+        let record = if env::var("CACHE").is_ok() {
+            let cached_record = self.state.l1_cache.lookup(addr);
+            let record = if cached_record.is_none() {
+                self.state.l1_cache.insert(addr, &mut self.state.memory);
+                self.state.memory.get(&addr)
+            } else {
+                cached_record
+            };
+            record
+        } else {
+            self.state.memory.get(&addr)
+        };
 
         if self.executor_mode == ExecutorMode::Checkpoint || self.unconstrained {
             match record {
@@ -274,6 +289,7 @@ impl<'a> Executor<'a> {
             }
         }
 
+        println!("word record: {:?}", record);
         match record {
             Some(record) => record.value,
             None => 0,
@@ -309,7 +325,99 @@ impl<'a> Executor<'a> {
         local_memory_access: Option<&mut HashMap<u32, MemoryLocalEvent>>,
     ) -> MemoryReadRecord {
         // Get the memory record entry.
-        let entry = self.state.memory.entry(addr);
+        println!("mr addr: {:?}", addr);
+
+        let record = if env::var("CACHE").is_ok() {
+            let cached_word = self.state.l1_cache.lookup_mut(addr);
+            let record = if cached_word.is_none() {
+                self.state.l1_cache.insert(addr, &mut self.state.memory);
+                let entry = self.state.memory.entry(addr);
+                match entry {
+                    Entry::Occupied(entry) => entry.into_mut(),
+                    Entry::Vacant(entry) => {
+                        // If addr has a specific value to be initialized with, use that, otherwise 0.
+                        let value = self.state.uninitialized_memory.get(&addr).unwrap_or(&0);
+                        self.uninitialized_memory_checkpoint
+                            .entry(addr)
+                            .or_insert_with(|| *value != 0);
+                        entry.insert(MemoryRecord {
+                            value: *value,
+                            shard: 0,
+                            timestamp: 0,
+                        })
+                    }
+                }
+            } else {
+                let cached_word = cached_word.expect("There must be a valid MemoryRecord for the word");
+                if env::var("PRINT_CACHED").is_ok() {
+                    println!("mr cached_word: {:?}", cached_word);
+                }
+                cached_word
+            };
+
+            record
+        } else {
+            let entry = self.state.memory.entry(addr);
+            let record: &mut MemoryRecord = match entry {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => {
+                    // If addr has a specific value to be initialized with, use that, otherwise 0.
+                    let value = self.state.uninitialized_memory.get(&addr).unwrap_or(&0);
+                    self.uninitialized_memory_checkpoint
+                        .entry(addr)
+                        .or_insert_with(|| *value != 0);
+                    entry.insert(MemoryRecord {
+                        value: *value,
+                        shard: 0,
+                        timestamp: 0,
+                    })
+                }
+            };
+            record
+        };
+
+        println!("mr record: {:?}", record);
+        // let record = if cached_word.is_none() {
+        //     self.state.l1_cache.insert(addr, &mut self.state.memory);
+        //     let entry = self.state.memory.entry(addr);
+        //     match entry {
+        //         Entry::Occupied(entry) => entry.into_mut(),
+        //         Entry::Vacant(entry) => {
+        //             // If addr has a specific value to be initialized with, use that, otherwise 0.
+        //             let value = self.state.uninitialized_memory.get(&addr).unwrap_or(&0);
+        //             self.uninitialized_memory_checkpoint
+        //                 .entry(addr)
+        //                 .or_insert_with(|| *value != 0);
+        //             entry.insert(MemoryRecord {
+        //                 value: *value,
+        //                 shard: 0,
+        //                 timestamp: 0,
+        //             })
+        //         }
+        //     }
+        // } else {
+        //     cached_word.expect("There must be a valid MemoryRecord for the word")
+        // };
+
+        // let entry = self.state.memory.entry(addr);
+
+        // If it's the first time accessing this address, initialize previous values.
+        // let record: &mut MemoryRecord = match entry {
+        //     Entry::Occupied(entry) => entry.into_mut(),
+        //     Entry::Vacant(entry) => {
+        //         // If addr has a specific value to be initialized with, use that, otherwise 0.
+        //         let value = self.state.uninitialized_memory.get(&addr).unwrap_or(&0);
+        //         self.uninitialized_memory_checkpoint
+        //             .entry(addr)
+        //             .or_insert_with(|| *value != 0);
+        //         entry.insert(MemoryRecord {
+        //             value: *value,
+        //             shard: 0,
+        //             timestamp: 0,
+        //         })
+        //     }
+        // };
+
         // if self.executor_mode == ExecutorMode::Checkpoint || self.unconstrained {
         //     match entry {
         //         Entry::Occupied(ref entry) => {
@@ -338,21 +446,21 @@ impl<'a> Executor<'a> {
         // }
 
         // If it's the first time accessing this address, initialize previous values.
-        let record: &mut MemoryRecord = match entry {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => {
-                // If addr has a specific value to be initialized with, use that, otherwise 0.
-                let value = self.state.uninitialized_memory.get(&addr).unwrap_or(&0);
-                self.uninitialized_memory_checkpoint
-                    .entry(addr)
-                    .or_insert_with(|| *value != 0);
-                entry.insert(MemoryRecord {
-                    value: *value,
-                    shard: 0,
-                    timestamp: 0,
-                })
-            }
-        };
+        // let record: &mut MemoryRecord = match entry {
+        //     Entry::Occupied(entry) => entry.into_mut(),
+        //     Entry::Vacant(entry) => {
+        //         // If addr has a specific value to be initialized with, use that, otherwise 0.
+        //         let value = self.state.uninitialized_memory.get(&addr).unwrap_or(&0);
+        //         self.uninitialized_memory_checkpoint
+        //             .entry(addr)
+        //             .or_insert_with(|| *value != 0);
+        //         entry.insert(MemoryRecord {
+        //             value: *value,
+        //             shard: 0,
+        //             timestamp: 0,
+        //         })
+        //     }
+        // };
 
         let prev_record = *record;
         record.shard = shard;
@@ -397,51 +505,112 @@ impl<'a> Executor<'a> {
         local_memory_access: Option<&mut HashMap<u32, MemoryLocalEvent>>,
     ) -> MemoryWriteRecord {
         // Get the memory record entry.
-        let entry = self.state.memory.entry(addr);
-        if self.executor_mode == ExecutorMode::Checkpoint || self.unconstrained {
-            match entry {
-                Entry::Occupied(ref entry) => {
-                    let record = entry.get();
-                    self.memory_checkpoint
+        println!("mw addr: {:?}", addr);
+        let record = if env::var("CACHE").is_ok() { 
+            let cached_word = self.state.l1_cache.lookup_mut(addr);
+            if env::var("PRINT_CACHED").is_ok() {
+                println!("mw cached_word: {:?}", cached_word);
+            }
+            let record = if cached_word.is_none() {
+                let entry = self.state.memory.entry(addr);
+                if self.executor_mode == ExecutorMode::Checkpoint || self.unconstrained {
+                    match entry {
+                        Entry::Occupied(ref entry) => {
+                            let record = entry.get();
+                            self.memory_checkpoint
+                                .entry(addr)
+                                .or_insert_with(|| Some(*record));
+                        }
+                        Entry::Vacant(_) => {
+                            self.memory_checkpoint.entry(addr).or_insert(None);
+                        }
+                    }
+                }
+    
+                // If we're in unconstrained mode, we don't want to modify state, so we'll save the
+                // original state if it's the first time modifying it.
+                if self.unconstrained {
+                    let record = match entry {
+                        Entry::Occupied(ref entry) => Some(entry.get()),
+                        Entry::Vacant(_) => None,
+                    };
+                    self.unconstrained_state
+                        .memory_diff
                         .entry(addr)
-                        .or_insert_with(|| Some(*record));
+                        .or_insert(record.copied());
                 }
-                Entry::Vacant(_) => {
-                    self.memory_checkpoint.entry(addr).or_insert(None);
-                }
-            }
-        }
-
-        // If we're in unconstrained mode, we don't want to modify state, so we'll save the
-        // original state if it's the first time modifying it.
-        if self.unconstrained {
-            let record = match entry {
-                Entry::Occupied(ref entry) => Some(entry.get()),
-                Entry::Vacant(_) => None,
+    
+                // If it's the first time accessing this address, initialize previous values.
+                let record: &mut MemoryRecord = match entry {
+                    Entry::Occupied(entry) => entry.into_mut(),
+                    Entry::Vacant(entry) => {
+                        // If addr has a specific value to be initialized with, use that, otherwise 0.
+                        let value = self.state.uninitialized_memory.get(&addr).unwrap_or(&0);
+                        self.uninitialized_memory_checkpoint
+                            .entry(addr)
+                            .or_insert_with(|| *value != 0);
+    
+                        entry.insert(MemoryRecord {
+                            value: *value,
+                            shard: 0,
+                            timestamp: 0,
+                        })
+                    }
+                };
+                record
+            } else {
+                cached_word.unwrap()
             };
-            self.unconstrained_state
-                .memory_diff
-                .entry(addr)
-                .or_insert(record.copied());
-        }
-
-        // If it's the first time accessing this address, initialize previous values.
-        let record: &mut MemoryRecord = match entry {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => {
-                // If addr has a specific value to be initialized with, use that, otherwise 0.
-                let value = self.state.uninitialized_memory.get(&addr).unwrap_or(&0);
-                self.uninitialized_memory_checkpoint
-                    .entry(addr)
-                    .or_insert_with(|| *value != 0);
-
-                entry.insert(MemoryRecord {
-                    value: *value,
-                    shard: 0,
-                    timestamp: 0,
-                })
+            record
+        } else {
+            let entry = self.state.memory.entry(addr);
+            if self.executor_mode == ExecutorMode::Checkpoint || self.unconstrained {
+                match entry {
+                    Entry::Occupied(ref entry) => {
+                        let record = entry.get();
+                        self.memory_checkpoint
+                            .entry(addr)
+                            .or_insert_with(|| Some(*record));
+                    }
+                    Entry::Vacant(_) => {
+                        self.memory_checkpoint.entry(addr).or_insert(None);
+                    }
+                }
             }
+    
+            // If we're in unconstrained mode, we don't want to modify state, so we'll save the
+            // original state if it's the first time modifying it.
+            if self.unconstrained {
+                let record = match entry {
+                    Entry::Occupied(ref entry) => Some(entry.get()),
+                    Entry::Vacant(_) => None,
+                };
+                self.unconstrained_state
+                    .memory_diff
+                    .entry(addr)
+                    .or_insert(record.copied());
+            }
+    
+            // If it's the first time accessing this address, initialize previous values.
+            let record: &mut MemoryRecord = match entry {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => {
+                    // If addr has a specific value to be initialized with, use that, otherwise 0.
+                    let value = self.state.uninitialized_memory.get(&addr).unwrap_or(&0);
+                    self.uninitialized_memory_checkpoint
+                        .entry(addr)
+                        .or_insert_with(|| *value != 0);
+    
+                    entry.insert(MemoryRecord {
+                        value: *value,
+                        shard: 0,
+                        timestamp: 0,
+                    })
+                }
+            };
+            record
         };
+        
 
         let prev_record = *record;
         record.value = value;
@@ -592,6 +761,7 @@ impl<'a> Executor<'a> {
         instruction: &Instruction,
         rng: &mut Rand,
     ) -> Result<(), ExecutionError> {
+        println!("Executing instruction: {:?}", instruction);
         let mut next_pc = self.state.pc.wrapping_add(4);
 
         let rd: Register;

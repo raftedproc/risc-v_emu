@@ -4,6 +4,7 @@
 //! policy, along with the core execution state tracking for the emulator.
 
 use serde::{Deserialize, Serialize};
+use sp1_primitives::consts::WORD_SIZE;
 
 use crate::{events::MemoryRecord, Memory};
 
@@ -27,8 +28,8 @@ pub struct CacheLine {
 }
 
 impl CacheLine {
-    /// Number of memory records in each cache line
-    const LINE_SIZE: usize = 32;
+    /// Number of memory records/4 bytes words in each cache line
+    const LINE_SIZE: usize = 8;
 
     /// Creates a new empty cache line
     #[allow(unused)]
@@ -53,7 +54,7 @@ impl CacheLine {
         let lru = 0;
         let mut data = [MemoryRecord::default(); Self::LINE_SIZE];
         for offset in 0..Self::LINE_SIZE {
-            let addr = cacheline_addr | offset as u32;
+            let addr = addr_from_cacheline_addr_offset(cacheline_addr, offset);
             let record = memory.get(&addr).cloned().unwrap_or_default();
             data[offset] = record;
         }
@@ -122,22 +123,45 @@ impl L1Cache {
     /// # Returns
     /// * `Some(&mut MemoryRecord)` if the address is in cache
     /// * `None` if the address is not in cache (cache miss)
-    pub fn lookup(&mut self, addr: u32) -> Option<&mut MemoryRecord> {
-        let set: usize = calculate_set(addr);
-        let tag = calculate_tag(addr);
+    pub fn lookup(&mut self, addr: u32) -> Option<&MemoryRecord> {
+        let set: usize = set_from_addr(addr);
+        let tag = tag_from_addr(addr);
 
         let set_lines = unsafe { self.cache.get_unchecked_mut(set) };
 
         // TODO multiway
         if set_lines[0].valid && set_lines[0].tag == tag {
             set_lines[0].lru += 1;
-            let offset = calculate_offset(addr);
+            let offset = offset_from_addr(addr);
+            return Some(&set_lines[0].data[offset]);
+        }
+
+        if set_lines[1].valid && set_lines[1].tag == tag {
+            set_lines[1].lru += 1;
+            let offset = offset_from_addr(addr);
+            return Some(&set_lines[1].data[offset]);
+        }
+        None
+    }
+
+    pub fn lookup_mut(&mut self, addr: u32) -> Option<&mut MemoryRecord> {
+        // println!("cache lookup_mut: {}", addr);
+
+        let set: usize = set_from_addr(addr);
+        let tag = tag_from_addr(addr);
+
+        let set_lines = unsafe { self.cache.get_unchecked_mut(set) };
+
+        // TODO multiway
+        if set_lines[0].valid && set_lines[0].tag == tag {
+            set_lines[0].lru += 1;
+            let offset = offset_from_addr(addr);
             return Some(&mut set_lines[0].data[offset]);
         }
 
         if set_lines[1].valid && set_lines[1].tag == tag {
             set_lines[1].lru += 1;
-            let offset = calculate_offset(addr);
+            let offset = offset_from_addr(addr);
             return Some(&mut set_lines[1].data[offset]);
         }
         None
@@ -154,27 +178,24 @@ impl L1Cache {
     /// * `addr` - Memory address to cache
     /// * `memory` - Memory to load data from
     pub fn insert(&mut self, addr: u32, memory: &mut Memory) {
-        let set = calculate_set(addr);
-        let tag = calculate_tag(addr);
-        println!("Using set {} tag {:b} for addr {:b}", set, tag, addr);
+        let set = set_from_addr(addr);
+        let tag = tag_from_addr(addr);
 
         let aligned_addr = addr & !(CacheLine::LINE_SIZE - 1) as u32;
 
         let set_lines = unsafe { self.cache.get_unchecked_mut(set) };
 
         // TODO watch out re-insertion
-        println!(
-            "LRU: {} {} {}",
-            set_lines[0].lru, set_lines[1].lru, set_lines[1].valid
-        );
-        let cache_line = if set_lines[0].lru <= set_lines[1].lru && !set_lines[0].valid {
+        let cacheline = if set_lines[0].lru <= set_lines[1].lru && !set_lines[0].valid {
             &mut set_lines[0]
         } else {
             &mut set_lines[1]
         };
 
-        store_cacheline_if_needed(set, cache_line, memory);
-        *cache_line = CacheLine::from_memory(tag, aligned_addr, memory);
+        store_cacheline_if_needed(set, cacheline, memory);
+        let new_cacheline = CacheLine::from_memory(tag, aligned_addr, memory);
+        println!("inserting new cache line: {:?}", new_cacheline);
+        *cacheline = new_cacheline;
     }
 }
 
@@ -186,18 +207,25 @@ impl L1Cache {
 ///
 /// # Arguments
 /// * `set` - Cache set index
-/// * `cache_line` - Cache line to write back
+/// * `cacheline` - Cache line to write back
 /// * `memory` - Memory to write data to
-fn store_cacheline_if_needed(set: usize, cache_line: &CacheLine, memory: &mut Memory) {
-    if cache_line.valid {
-        let tag = cache_line.tag;
-        let cacheline_addr = calculate_cacheline_addr(tag, set);
-        println!(
-            "store_cacheline_if_needed for set {} and tag {:b} and addr {:b}",
-            set, cache_line.tag, cacheline_addr
-        );
-        for (offset, record) in cache_line.data.iter().enumerate() {
-            memory.insert(cacheline_addr | offset as u32, *record);
+fn store_cacheline_if_needed(set: usize, cacheline: &CacheLine, memory: &mut Memory) {
+    // todo clean this up
+    let cacheline_addr = cacheline_from_tag_set(cacheline.tag, set);
+    println!(
+        "store_cacheline_if_needed cacheling addr {} ",
+        cacheline_addr
+    );
+    if cacheline.valid {
+        let tag = cacheline.tag;
+        let cacheline_addr = cacheline_from_tag_set(tag, set);
+        for (offset, record) in cacheline.data.iter().enumerate() {
+            let addr = cacheline_addr | (offset * WORD_SIZE) as u32;
+            println!(
+                "store_cacheline_if_needed addr {} cached_word: {:?}",
+                addr, record
+            );
+            memory.insert(addr, *record);
         }
     }
 }
@@ -213,14 +241,14 @@ fn store_cacheline_if_needed(set: usize, cache_line: &CacheLine, memory: &mut Me
 /// # Returns
 /// Set index in range [0, 255]
 #[inline(always)]
-pub fn calculate_set(addr: u32) -> usize {
+pub fn set_from_addr(addr: u32) -> usize {
     ((addr >> 5) & 0xFF) as usize
 }
 
 /// Takes the upper bits [14:31] of the address as the tag.
 /// These bits are used to check if a cache line contains the desired address.
 #[inline(always)]
-pub fn calculate_tag(addr: u32) -> u32 {
+pub fn tag_from_addr(addr: u32) -> u32 {
     addr >> 14
 }
 
@@ -230,8 +258,8 @@ pub fn calculate_tag(addr: u32) -> u32 {
 /// Uses bits [0:4] of the address to determine the position within a cache line.
 /// With 32 words per line, we need 5 bits for the offset.
 /// Offset in range [0, 31]
-pub fn calculate_offset(addr: u32) -> usize {
-    (addr & 0x1F) as usize
+pub fn offset_from_addr(addr: u32) -> usize {
+    (addr as usize & 0x1F) / WORD_SIZE
 }
 
 /// Reconstructs the base memory address of a cache line from its tag and set
@@ -239,8 +267,13 @@ pub fn calculate_offset(addr: u32) -> usize {
 /// Combines the tag (upper bits) and set index (middle bits) to form the
 /// base address of a cache line. The offset bits are set to 0.
 #[inline(always)]
-pub fn calculate_cacheline_addr(tag: u32, set: usize) -> u32 {
+pub fn cacheline_from_tag_set(tag: u32, set: usize) -> u32 {
     tag << 14 | (set << 5) as u32
+}
+
+#[inline(always)]
+pub fn addr_from_cacheline_addr_offset(cacheline_addr: u32, offset: usize) -> u32 {
+    cacheline_addr | (offset * WORD_SIZE) as u32
 }
 
 #[cfg(test)]
@@ -265,7 +298,7 @@ mod tests {
     fn test_cacheline_from_memory() {
         let mut memory = Memory::new();
         let addr = 0x1000;
-        let tag = calculate_tag(addr);
+        let tag = tag_from_addr(addr);
         let record = MemoryRecord {
             shard: 42,
             timestamp: 42,
@@ -312,7 +345,7 @@ mod tests {
         cache.insert(evicting_addr, &mut memory);
 
         // Modify cached value
-        if let Some(cached) = cache.lookup(evicting_addr) {
+        if let Some(cached) = cache.lookup_mut(evicting_addr) {
             cached.value = 100;
         }
 
@@ -331,9 +364,9 @@ mod tests {
     #[test]
     fn test_cache_address_calculations() {
         let addr = 0x12345678;
-        let set = calculate_set(addr);
-        let tag = calculate_tag(addr);
-        let offset = calculate_offset(addr);
+        let set = set_from_addr(addr);
+        let tag = tag_from_addr(addr);
+        let offset = offset_from_addr(addr);
 
         // Verify set is within bounds
         assert!(set < L1Cache::SETS);
@@ -342,7 +375,7 @@ mod tests {
         assert!(offset < CacheLine::LINE_SIZE);
 
         // Verify we can reconstruct the address (ignoring offset)
-        let base_addr = calculate_cacheline_addr(tag, set);
+        let base_addr = cacheline_from_tag_set(tag, set);
         assert_eq!(addr & !0x1F, base_addr);
     }
 
@@ -364,7 +397,7 @@ mod tests {
 
         // Insert values into memory
         for (i, &val) in values.iter().enumerate() {
-            let addr = base_addr + (i as u32);
+            let addr = base_addr + (i * WORD_SIZE) as u32;
             let mut record = MemoryRecord::default();
             record.value = val;
             memory.insert(addr, record);
@@ -375,7 +408,7 @@ mod tests {
 
         // Verify all addresses in the cache line are cached
         for (i, &val) in values.iter().enumerate() {
-            let addr = base_addr + (i as u32);
+            let addr = base_addr + (i * WORD_SIZE) as u32;
             let record = cache.lookup(addr).expect("Address should be cached");
             assert_eq!(record.value, val, "Cached value mismatch");
         }
@@ -420,10 +453,10 @@ mod tests {
         }
 
         // Verify address calculations at boundaries
-        assert_eq!(calculate_offset(addr1), 0x1F);
-        assert_eq!(calculate_offset(addr2), 0x0);
-        assert_eq!(calculate_set(addr3), 0xFF);
-        assert_eq!(calculate_set(addr4), 0x0);
+        assert_eq!(offset_from_addr(addr1), 0x7);
+        assert_eq!(offset_from_addr(addr2), 0x0);
+        assert_eq!(set_from_addr(addr3), 0xFF);
+        assert_eq!(set_from_addr(addr4), 0x0);
     }
 
     #[test]
@@ -540,7 +573,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cache_line_modification() {
+    fn test_cacheline_modification() {
         let mut cache = L1Cache::new();
         let mut memory = Memory::new();
 
