@@ -261,7 +261,7 @@ impl<'a> Executor<'a> {
     pub fn word(&mut self, addr: u32) -> u32 {
         #[allow(clippy::single_match_else)]
 
-        //println!("word addr: {:?}", addr);
+        println!("word addr: {:?}", addr);
 
         let record = if env::var("CACHE").is_ok() {
             let cached_record = self.state.l1_cache.lookup_no_ts_update(addr);
@@ -289,7 +289,11 @@ impl<'a> Executor<'a> {
             }
         }
 
-        //println!("word record: {:?}", record);
+        if record.is_none() {
+            println!("word record: {:?}", Some(MemoryRecord::default()));
+        } else {
+            println!("word record: {:?}", record);
+        }
         match record {
             Some(record) => record.value,
             None => 0,
@@ -325,10 +329,10 @@ impl<'a> Executor<'a> {
         local_memory_access: Option<&mut HashMap<u32, MemoryLocalEvent>>,
     ) -> MemoryReadRecord {
         // Get the memory record entry.
-        //println!("mr addr: {:?}", addr);
+        println!("mr addr: {:?}", addr);
 
         let record = if env::var("CACHE").is_ok() {
-            let cached_word = self.state.l1_cache.lookup_mut(addr, timestamp);
+            let cached_word = self.state.l1_cache.lookup_mut_no_ts_update(addr);
             let record = if cached_word.is_none() {
                 let entry = self.state.memory.entry(addr);
                 match entry {
@@ -352,7 +356,7 @@ impl<'a> Executor<'a> {
             } else {
                 let cached_word = cached_word.expect("There must be a valid MemoryRecord for the word");
                 if env::var("PRINT_CACHED").is_ok() {
-                    //println!("mr cached_word: {:?} timestamp: {:?}", cached_word, timestamp);
+                    println!("mr cached_word: {:?} timestamp: {:?}", cached_word, timestamp);
                 }
                 cached_word
             };
@@ -378,7 +382,7 @@ impl<'a> Executor<'a> {
             record
         };
 
-        //println!("mr record: {:?}", record);
+        println!("mr record: {:?}", record);
         // let record = if cached_word.is_none() {
         //     self.state.l1_cache.insert(addr, &mut self.state.memory);
         //     let entry = self.state.memory.entry(addr);
@@ -507,11 +511,12 @@ impl<'a> Executor<'a> {
         local_memory_access: Option<&mut HashMap<u32, MemoryLocalEvent>>,
     ) -> MemoryWriteRecord {
         // Get the memory record entry.
-        //println!("mw addr: {:?}", addr);
+        println!("mw addr: {:?}", addr);
         let record = if env::var("CACHE").is_ok() { 
-            let cached_word = self.state.l1_cache.lookup_mut(addr, timestamp);
+            let cached_word = self.state.l1_cache.lookup_mut_no_ts_update(addr);
+            
             if env::var("PRINT_CACHED").is_ok() {
-                //println!("mw cached_word: {:?}", cached_word);
+                println!("mw cached_word: {:?}", cached_word);
             }
             let record = if cached_word.is_none() {
                 let entry = self.state.memory.entry(addr);
@@ -561,7 +566,16 @@ impl<'a> Executor<'a> {
                 };
                 record
             } else {
-                cached_word.unwrap()
+                let word = cached_word.unwrap();
+                let record = word.clone();
+
+                if self.unconstrained {
+                    self.unconstrained_state
+                        .memory_diff
+                        .entry(addr)
+                        .or_insert(Some(record));
+                }
+                word
             };
             record
         } else {
@@ -763,7 +777,7 @@ impl<'a> Executor<'a> {
         instruction: &Instruction,
         rng: &mut Rand,
     ) -> Result<(), ExecutionError> {
-        //println!("Executing instruction: {:?}", instruction);
+        println!("Executing instruction: {:?}", instruction);
         let mut next_pc = self.state.pc.wrapping_add(4);
 
         let rd: Register;
@@ -981,6 +995,7 @@ impl<'a> Executor<'a> {
                 // register is that we write to it later.
                 let t0 = Register::X5;
                 let syscall_id = self.register(t0);
+                println!("Syscall id: {}", syscall_id);
                 c = self.rr(Register::X11, MemoryAccessPosition::C);
                 b = self.rr(Register::X10, MemoryAccessPosition::B);
                 let syscall = SyscallCode::from_u32(syscall_id);

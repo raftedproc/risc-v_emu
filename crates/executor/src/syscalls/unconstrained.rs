@@ -39,10 +39,14 @@ impl Syscall for ExitUnconstrainedSyscall {
             for (addr, value) in ctx.rt.unconstrained_state.memory_diff.drain() {
                 match value {
                     Some(value) => {
+                        println!("UNC UPD addr: {:08x} value: {:?}", addr, value);
                         ctx.rt.state.memory.insert(addr, value);
+                        ctx.rt.state.l1_cache.update_if_in_cache(addr, value);
                     }
                     None => {
+                        println!("UNC REM addr: {:08x} value: {:?}", addr, 0);
                         ctx.rt.state.memory.remove(&addr);
+                        ctx.rt.state.l1_cache.erase_if_in_cache(addr);
                     }
                 }
             }

@@ -150,14 +150,14 @@ impl L1Cache {
         if set_lines[0].valid && set_lines[0].tag == tag {
             set_lines[0].hits += 1;
             let offset = offset_from_addr(addr);
-            // set_lines[0].data[offset].timestamp = timestamp;
+            set_lines[0].data[offset].timestamp = timestamp;
             return Some(&set_lines[0].data[offset]);
         }
 
         if set_lines[1].valid && set_lines[1].tag == tag {
             set_lines[1].hits += 1;
             let offset = offset_from_addr(addr);
-            // set_lines[1].data[offset].timestamp = timestamp;
+            set_lines[1].data[offset].timestamp = timestamp;
             return Some(&set_lines[1].data[offset]);
         }
         None
@@ -196,14 +196,37 @@ impl L1Cache {
         if set_lines[0].valid && set_lines[0].tag == tag {
             set_lines[0].hits += 1;
             let offset = offset_from_addr(addr);
-            // set_lines[0].data[offset].timestamp = timestamp;
+            set_lines[0].data[offset].timestamp = timestamp;
             return Some(&mut set_lines[0].data[offset]);
         }
 
         if set_lines[1].valid && set_lines[1].tag == tag {
             set_lines[1].hits += 1;
             let offset = offset_from_addr(addr);
-            // set_lines[1].data[offset].timestamp = timestamp;
+            set_lines[1].data[offset].timestamp = timestamp;
+            return Some(&mut set_lines[1].data[offset]);
+        }
+        None
+    }
+
+    pub fn lookup_mut_no_ts_update(&mut self, addr: u32) -> Option<&mut MemoryRecord> {
+        // println!("cache lookup_mut: {}", addr);
+
+        let set: usize = set_from_addr(addr);
+        let tag = tag_from_addr(addr);
+
+        let set_lines = unsafe { self.cache.get_unchecked_mut(set) };
+
+        // TODO multiway
+        if set_lines[0].valid && set_lines[0].tag == tag {
+            set_lines[0].hits += 1;
+            let offset = offset_from_addr(addr);
+            return Some(&mut set_lines[0].data[offset]);
+        }
+
+        if set_lines[1].valid && set_lines[1].tag == tag {
+            set_lines[1].hits += 1;
+            let offset = offset_from_addr(addr);
             return Some(&mut set_lines[1].data[offset]);
         }
         None
@@ -238,6 +261,35 @@ impl L1Cache {
         let new_cacheline =
             CacheLine::from_memory_and_uninit_memory(tag, base_addr, memory, uninit_memory);
         *cacheline = new_cacheline;
+    }
+
+    #[inline(always)]
+    /// updates MemoryRecord for a specific addr
+    /// Used by ExitUnconstrainedSyscall to sync memory
+    pub fn update_if_in_cache(&mut self, addr: u32, memory_record: MemoryRecord) {
+        let set = set_from_addr(addr);
+        let tag = tag_from_addr(addr);
+
+        let set_lines = unsafe { self.cache.get_unchecked_mut(set) };
+
+        let cacheline = if set_lines[0].tag == tag {
+            &mut set_lines[0]
+        } else if set_lines[1].tag == tag {
+            &mut set_lines[1]
+        } else {
+            return;
+        };
+
+        let offset = offset_from_addr(addr);
+        cacheline.data[offset] = memory_record;
+    }
+
+    #[inline(always)]
+    /// erases MemoryRecord for a specific addr
+    /// Used by ExitUnconstrainedSyscall to sync memory
+    pub fn erase_if_in_cache(&mut self, addr: u32) {
+        let memory_record = MemoryRecord::default();
+        self.update_if_in_cache(addr, memory_record);
     }
 }
 
