@@ -46,6 +46,9 @@ impl Syscall for HintReadSyscall {
         assert_eq!(ptr % 4, 0, "hint read address not aligned to 4 bytes");
         // Iterate through the vec in 4-byte chunks
         for i in (0..len).step_by(4) {
+            if ptr + i == 9082224 {
+                println!("hint read: {}", ptr + i);
+            }
             // Get each byte in the chunk
             let b1 = vec[i as usize];
             // In case the vec is not a multiple of 4, right-pad with 0s. This is fine because we

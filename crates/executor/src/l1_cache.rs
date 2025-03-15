@@ -63,6 +63,13 @@ impl CacheLine {
         let mut data = [MemoryRecord::default(); Self::LINE_SIZE];
         for offset in 0..Self::LINE_SIZE {
             let addr = addr_from_base_addr_offset(base_addr, offset);
+            if addr == 9082224 {
+                println!(
+                    "from_memory_and_uninit_memory: 9082224 memory {:?} uninit memory {:?}",
+                    memory.get(&addr),
+                    uninit_memory.get(&addr)
+                );
+            }
             let record = memory.get(&addr).cloned().unwrap_or_else(|| {
                 let value = *uninit_memory.get(&addr).unwrap_or(&0);
                 MemoryRecord {

@@ -364,11 +364,17 @@ impl<'a> Executor<'a> {
             record
         } else {
             let entry = self.state.memory.entry(addr);
+            if addr == 9082224 {
+                println!("mr entry 1: add 9082224 {:?}", entry);
+            }
             let record: &mut MemoryRecord = match entry {
                 Entry::Occupied(entry) => entry.into_mut(),
                 Entry::Vacant(entry) => {
                     // If addr has a specific value to be initialized with, use that, otherwise 0.
                     let value = self.state.uninitialized_memory.get(&addr).unwrap_or(&0);
+                    if addr == 9082224 {
+                        println!("mr entry 2 : add 9082224 {:?}", self.state.uninitialized_memory.get(&addr));
+                    }
                     self.uninitialized_memory_checkpoint
                         .entry(addr)
                         .or_insert_with(|| *value != 0);
@@ -382,7 +388,6 @@ impl<'a> Executor<'a> {
             record
         };
 
-        println!("mr record: {:?}", record);
         // let record = if cached_word.is_none() {
         //     self.state.l1_cache.insert(addr, &mut self.state.memory);
         //     let entry = self.state.memory.entry(addr);
@@ -471,6 +476,7 @@ impl<'a> Executor<'a> {
         let prev_record = *record;
         record.shard = shard;
         record.timestamp = timestamp;
+        println!("mr record: {:?}", record);
 
         // if !self.unconstrained {
         //     let local_memory_access = if let Some(local_memory_access) = local_memory_access {

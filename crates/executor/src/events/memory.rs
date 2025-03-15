@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// This object encapsulates the information needed to prove a memory access operation. This
 /// includes the shard, timestamp, and value of the memory address.
-#[derive(Debug, PartialEq, Eq,Copy, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone, Default, Serialize, Deserialize)]
 pub struct MemoryRecord {
     /// The shard number.
     pub shard: u32,
@@ -143,13 +143,19 @@ pub struct MemoryInitializeFinalizeEvent {
 impl MemoryReadRecord {
     /// Creates a new [``MemoryReadRecord``].
     #[must_use]
-    pub const fn new(
+    pub fn new(
         value: u32,
         shard: u32,
         timestamp: u32,
         prev_shard: u32,
         prev_timestamp: u32,
     ) -> Self {
+        if shard <= prev_shard && ((shard != prev_shard) || (timestamp <= prev_timestamp)) {
+            println!(
+                "Invalid     record: shard {} timestamp {} prev_shard {} prev_timestamp {}",
+                shard, timestamp, prev_shard, prev_timestamp
+            );
+        }
         assert!(shard > prev_shard || ((shard == prev_shard) && (timestamp > prev_timestamp)));
         Self {
             value,
@@ -164,7 +170,7 @@ impl MemoryReadRecord {
 impl MemoryWriteRecord {
     /// Creates a new [``MemoryWriteRecord``].
     #[must_use]
-    pub const fn new(
+    pub fn new(
         value: u32,
         shard: u32,
         timestamp: u32,
@@ -172,7 +178,13 @@ impl MemoryWriteRecord {
         prev_shard: u32,
         prev_timestamp: u32,
     ) -> Self {
-        assert!(shard > prev_shard || ((shard == prev_shard) && (timestamp > prev_timestamp)),);
+        if shard <= prev_shard && ((shard != prev_shard) || (timestamp <= prev_timestamp)) {
+            println!(
+                "Invalid write record: shard {} timestamp {} prev_shard {} prev_timestamp {}",
+                shard, timestamp, prev_shard, prev_timestamp
+            );
+        }
+        assert!(shard > prev_shard || ((shard == prev_shard) && (timestamp > prev_timestamp)));
         Self {
             value,
             shard,
