@@ -261,18 +261,21 @@ impl<'a> Executor<'a> {
     pub fn word(&mut self, addr: u32) -> u32 {
         #[allow(clippy::single_match_else)]
 
-        println!("word addr: {:?}", addr);
+        // println!("word addr: {:?}", addr);
 
         let record = if env::var("CACHE").is_ok() {
             let cached_record = self.state.l1_cache.lookup_no_ts_update(addr);
             let record = if cached_record.is_none() {
                 self.state.l1_cache.insert(addr, &mut self.state.memory, &self.state.uninitialized_memory);
+                let record = self.state.memory.get(&addr);
+                // println!("cached record is none re-reading from mem {:?}", record);
                 self.state.memory.get(&addr)
             } else {
                 cached_record
             };
             record
         } else {
+            // println!("no cache path");
             self.state.memory.get(&addr)
         };
 
@@ -289,11 +292,7 @@ impl<'a> Executor<'a> {
             }
         }
 
-        if record.is_none() {
-            println!("word record: {:?}", Some(MemoryRecord::default()));
-        } else {
-            println!("word record: {:?}", record);
-        }
+        // println!("word record: {:?}", record);
         match record {
             Some(record) => record.value,
             None => 0,
@@ -329,7 +328,7 @@ impl<'a> Executor<'a> {
         local_memory_access: Option<&mut HashMap<u32, MemoryLocalEvent>>,
     ) -> MemoryReadRecord {
         // Get the memory record entry.
-        println!("mr addr: {:?}", addr);
+        // println!("mr addr: {:?}", addr);
 
         let record = if env::var("CACHE").is_ok() {
             let cached_word = self.state.l1_cache.lookup_mut_no_ts_update(addr);
@@ -364,17 +363,11 @@ impl<'a> Executor<'a> {
             record
         } else {
             let entry = self.state.memory.entry(addr);
-            if addr == 9082224 {
-                println!("mr entry 1: add 9082224 {:?}", entry);
-            }
             let record: &mut MemoryRecord = match entry {
                 Entry::Occupied(entry) => entry.into_mut(),
                 Entry::Vacant(entry) => {
                     // If addr has a specific value to be initialized with, use that, otherwise 0.
                     let value = self.state.uninitialized_memory.get(&addr).unwrap_or(&0);
-                    if addr == 9082224 {
-                        println!("mr entry 2 : add 9082224 {:?}", self.state.uninitialized_memory.get(&addr));
-                    }
                     self.uninitialized_memory_checkpoint
                         .entry(addr)
                         .or_insert_with(|| *value != 0);
@@ -476,7 +469,7 @@ impl<'a> Executor<'a> {
         let prev_record = *record;
         record.shard = shard;
         record.timestamp = timestamp;
-        println!("mr record: {:?}", record);
+        // println!("mr record: {:?}", record);
 
         // if !self.unconstrained {
         //     let local_memory_access = if let Some(local_memory_access) = local_memory_access {
@@ -517,7 +510,6 @@ impl<'a> Executor<'a> {
         local_memory_access: Option<&mut HashMap<u32, MemoryLocalEvent>>,
     ) -> MemoryWriteRecord {
         // Get the memory record entry.
-        println!("mw addr: {:?}", addr);
         let record = if env::var("CACHE").is_ok() { 
             let cached_word = self.state.l1_cache.lookup_mut_no_ts_update(addr);
             
@@ -639,6 +631,8 @@ impl<'a> Executor<'a> {
         record.shard = shard;
         record.timestamp = timestamp;
 
+        // println!("mw addr: {:?}, prev_record: {:?}, record: {:?}", addr, prev_record, record);
+
         if !self.unconstrained {
             let local_memory_access = if let Some(local_memory_access) = local_memory_access {
                 local_memory_access
@@ -659,14 +653,21 @@ impl<'a> Executor<'a> {
         }
 
         // Construct the memory write record.
-        MemoryWriteRecord::new(
+        let ret = MemoryWriteRecord::new(
             record.value,
             record.shard,
             record.timestamp,
             prev_record.value,
             prev_record.shard,
             prev_record.timestamp,
-        )
+        );
+
+        // if addr == 2091468 {
+        //     unsafe {
+        //         println!("mw addr: {:?}, set 78 {:?}", addr, self.state.l1_cache.cache.get_unchecked(78));
+        //     }
+        // }
+        ret
     }
 
     /// Read from memory, assuming that all addresses are aligned.
@@ -783,7 +784,7 @@ impl<'a> Executor<'a> {
         instruction: &Instruction,
         rng: &mut Rand,
     ) -> Result<(), ExecutionError> {
-        println!("Executing instruction: {:?}", instruction);
+        // println!("Executing instruction: {:?}", instruction);
         let mut next_pc = self.state.pc.wrapping_add(4);
 
         let rd: Register;
@@ -1001,7 +1002,6 @@ impl<'a> Executor<'a> {
                 // register is that we write to it later.
                 let t0 = Register::X5;
                 let syscall_id = self.register(t0);
-                println!("Syscall id: {}", syscall_id);
                 c = self.rr(Register::X11, MemoryAccessPosition::C);
                 b = self.rr(Register::X10, MemoryAccessPosition::B);
                 let syscall = SyscallCode::from_u32(syscall_id);
