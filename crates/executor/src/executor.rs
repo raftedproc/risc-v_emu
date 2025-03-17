@@ -263,10 +263,7 @@ impl<'a> Executor<'a> {
         // println!("word addr: {:?}", addr);
         let cached_record = self.state.l1_cache.lookup_no_ts_update(addr);
         let record = if cached_record.is_none() {
-            self.state.l1_cache.insert(addr, &mut self.state.memory);
-            let record = self.state.memory.get(&addr);
-            // println!("cached record is none re-reading from mem {:?}", record);
-            self.state.memory.get(&addr)
+            self.state.l1_cache.insert_and_return(addr, &mut self.state.memory)
         } else {
             cached_record
         };
@@ -340,11 +337,11 @@ impl<'a> Executor<'a> {
                     })
                 }
             };
-            self.state.l1_cache.insert(addr, &mut self.state.memory);
-            self.state
-                .l1_cache
-                .lookup_mut_no_ts_update(addr)
-                .expect("There must be a valid MemoryRecord for the word")
+            self.state.l1_cache.insert_and_return_mut(addr, &mut self.state.memory).expect("There must be a valid MemoryRecord for the word")
+            // self.state
+            //     .l1_cache
+            //     .lookup_mut_no_ts_update(addr)
+            //     .expect("There must be a valid MemoryRecord for the word")
         } else {
             let cached_word = cached_word.expect("There must be a valid MemoryRecord for the word");
             // if env::var("PRINT_CACHED").is_ok() {
@@ -1191,6 +1188,7 @@ impl<'a> Executor<'a> {
         // set.
         let done;
         loop {
+  
             if self.execute_cycle(done_inv, &mut rng)? {
                 done = true;
                 break;
