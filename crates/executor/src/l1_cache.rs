@@ -149,17 +149,17 @@ impl L1Cache {
             );
             
 
-            println!("tags: {:?}", tags);
+            // println!("tags: {:?}", tags);
             let b = _mm256_set1_epi32(tag as i32);
-            println!("b: {:?}", b);
+            // println!("b: {:?}", b);
             // Compare tags
             let tag_match = _mm256_cmpeq_epi32(tags, _mm256_set1_epi32(tag as i32));
             let valid_match = _mm256_and_si256(tag_match, valid_bits);
             let mask = _mm256_movemask_ps(_mm256_castsi256_ps(valid_match)) as u32;
-            println!("tag: {:?}", tag);
-            println!("tag_match: {:?}", tag_match);
-            println!("valid_match: {:?}", valid_match);
-            println!("mask: {:?}", mask);
+            // println!("tag: {:?}", tag);
+            // println!("tag_match: {:?}", tag_match);
+            // println!("valid_match: {:?}", valid_match);
+            // println!("mask: {:?}", mask);
             if mask != 0 {
                 // Find first matching way
                 let way = mask.trailing_zeros() as usize;
@@ -334,6 +334,8 @@ impl L1Cache {
                 }
                 min_way
             };
+
+            // println!("insert_and_return addr {:?}, set {} replacing way {}", addr, set, way);
 
             store_cacheline_if_needed(&set_lines[way], memory);
             let new_cacheline = CacheLine::from_memory(tag, base_addr, memory);
@@ -546,37 +548,81 @@ mod tests {
         let mut cache = L1Cache::new();
         let mut memory = Memory::new();
 
-        // Insert initial value
-        let evicting_addr = 0xfaeff000;
+        // Create WAYS + 1 addresses in the same set to test eviction
+        let base_addr = 0xfaeff000;
+        let mut addresses = Vec::new();
+        let mut records = Vec::new();
 
-        memory.insert(evicting_addr, MemoryRecord::default());
-        cache.insert(evicting_addr, &mut memory);
+        // Create WAYS addresses with unique values
+        for i in 0..L1Cache::WAYS {
+            let addr = (base_addr + (i << 14)) as u32;
+            let record = MemoryRecord {
+                shard: i as u32,
+                timestamp: i as u32,
+                value: i as u32 * 42,
+            };
+            addresses.push(addr);
+            records.push(record);
+            memory.insert(addr, record);
+            cache.insert_and_return(addr, &mut memory);
 
-        let addr = evicting_addr + (1 << 14); // Different tag, same set
-        let record = MemoryRecord {
-            shard: 42,
-            timestamp: 42,
-            value: 42,
-        };
-
-        memory.insert(addr, record);
-        cache.insert(addr, &mut memory);
-
-        // Modify cached value
-        if let Some(cached) = cache.lookup_mut_no_ts_update(addr) {
-            cached.value = 100;
+            // Verify it's cached
+            assert!(cache.lookup_no_ts_update(addr).is_some(), 
+                   "Address {} should be cached", i);
         }
 
-        // Force writeback by inserting to same set
-        let another_evicting_addr = addr + (2 << 14); // Different tag, same set
-        cache.insert(another_evicting_addr, &mut memory);
+        println!("records: {:#?} addresses {:#?}", records, addresses);
+        // Modify all cached values
+        for (i, addr) in addresses.iter().enumerate() {
+            if let Some(cached) = cache.lookup_mut_no_ts_update(*addr) {
+                cached.value = (i as u32 + 1) * 100;
+            }
+        }
 
-        // Verify written back value
-        assert_eq!(
-            memory.get(&addr).unwrap().value,
-            100,
-            "Modified value not written back"
-        );
+        // Access first address multiple times to increase its hits
+        for _ in 0..5 {
+            cache.lookup_no_ts_update(addresses[0]);
+        }
+
+        // Insert one more address to force eviction
+        let evicting_addr = (base_addr + (L1Cache::WAYS << 14)) as u32;
+        let evicting_record = MemoryRecord {
+            shard: L1Cache::WAYS as u32,
+            timestamp: L1Cache::WAYS as u32,
+            value: L1Cache::WAYS as u32 * 42,
+        };
+        memory.insert(evicting_addr, evicting_record);
+        cache.insert_and_return(evicting_addr, &mut memory);
+
+        // First address should still be cached due to high hits
+        assert!(cache.lookup_no_ts_update(addresses[0]).is_some(),
+               "First address should still be cached due to high hits");
+
+        println!("Memory: {:?}", memory);
+
+        assert!(false);
+        // let evicted_addr =4210159616;
+        // if let Some(record) = memory.get(&evicted_addr) {
+        //     if cache.lookup_no_ts_update(evicted_addr).is_some() {
+        //         assert_eq!(record.value, 336,
+        //                     "Modified value should be in memory for address {}", evicted_addr);
+        //     }
+        // } else {
+        //     panic!("Record should exist in memory for address {}", evicted_addr);
+        // }
+        // Verify modified values were written back to memory
+        // for (i, addr) in addresses.iter().enumerate() {
+        //     let set = set_from_addr(*addr);
+        //     println!("cache set {} : {:#?}", set, cache.cache[set]);
+        //     if let Some(record) = memory.get(addr) {
+        //         if cache.lookup_no_ts_update(*addr).is_some() {
+        //             assert_eq!(record.value, (i as u32 + 1) * 100,
+        //                       "Modified value should be in memory for address {}", addr);
+        //         }
+        //     } else {
+        //         panic!("Record should exist in memory for address {}", addr);
+        //     }
+        // }
     }
 
     #[test]
@@ -882,19 +928,19 @@ mod tests {
 
         // Insert all addresses into cache
         for &addr in &addrs {
-            cache.insert(addr, &mut memory);
+            cache.insert_and_return(addr, &mut memory);
         }
 
-        // All addresses except the last one should be cached (8-way set)
-        for i in 0..L1Cache::WAYS {
-            let set = set_from_addr(addrs[i]);
-            println!("Inserting address {:?}", memory);
-            println!("Inserting address {:?}", cache.cache[set]);
-
-            println!("lookup result {:?}", cache.lookup_no_ts_update(addrs[i]));
+        // All addresses except the first one should be cached (8-way set)
+        for &addr in addrs[1..].iter() {
+            println!("addr {}", addr);
+            let set = set_from_addr(addr);
+            println!("memory {:?}", memory);
+            println!("cache {:?}", cache.cache[set]);
+            println!("lookup result {:?}", cache.lookup_no_ts_update(addr));
             assert!(
-                cache.lookup_no_ts_update(addrs[i]).is_some(),
-                "Address {} should be cached", i
+                cache.lookup_no_ts_update(addr).is_some(),
+                "Address {} should be cached", addr
             );
         }
         // Last address (WAYS + 1) should have evicted one of the previous addresses
