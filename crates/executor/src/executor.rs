@@ -266,7 +266,7 @@ impl<'a> Executor<'a> {
         let record = if env::var("CACHE").is_ok() {
             let cached_record = self.state.l1_cache.lookup_no_ts_update(addr);
             let record = if cached_record.is_none() {
-                self.state.l1_cache.insert(addr, &mut self.state.memory, &self.state.uninitialized_memory);
+                self.state.l1_cache.insert(addr, &mut self.state.memory);
                 let record = self.state.memory.get(&addr);
                 // println!("cached record is none re-reading from mem {:?}", record);
                 self.state.memory.get(&addr)
@@ -349,7 +349,7 @@ impl<'a> Executor<'a> {
                         })
                     }
                 };
-                self.state.l1_cache.insert(addr, &mut self.state.memory, &self.state.uninitialized_memory);
+                self.state.l1_cache.insert(addr, &mut self.state.memory);
                 // WIP
                 self.state.memory.get_mut(&addr).expect("There must be a valid MemoryRecord for the word")
             } else {
