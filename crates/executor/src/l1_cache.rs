@@ -150,7 +150,7 @@ impl L1Cache {
             
 
             // println!("tags: {:?}", tags);
-            let b = _mm256_set1_epi32(tag as i32);
+            // let b = _mm256_set1_epi32(tag as i32);
             // println!("b: {:?}", b);
             // Compare tags
             let tag_match = _mm256_cmpeq_epi32(tags, _mm256_set1_epi32(tag as i32));
@@ -235,16 +235,16 @@ impl L1Cache {
 
         unsafe {
             // Load hits into AVX2 register
-            let hits = _mm256_setr_epi32(
-                set_lines[0].hits as i32,
-                set_lines[1].hits as i32,
-                set_lines[2].hits as i32,
-                set_lines[3].hits as i32,
-                set_lines[4].hits as i32,
-                set_lines[5].hits as i32,
-                set_lines[6].hits as i32,
-                set_lines[7].hits as i32,
-            );
+            // let hits = _mm256_setr_epi32(
+            //     set_lines[0].hits as i32,
+            //     set_lines[1].hits as i32,
+            //     set_lines[2].hits as i32,
+            //     set_lines[3].hits as i32,
+            //     set_lines[4].hits as i32,
+            //     set_lines[5].hits as i32,
+            //     set_lines[6].hits as i32,
+            //     set_lines[7].hits as i32,
+            // );
 
             // Load valid bits into AVX2 register
             let valid_bits = _mm256_setr_epi32(
@@ -293,16 +293,16 @@ impl L1Cache {
 
         unsafe {
             // Load hits and valid bits into AVX2 registers
-            let hits = _mm256_setr_epi32(
-                set_lines[0].hits as i32,
-                set_lines[1].hits as i32,
-                set_lines[2].hits as i32,
-                set_lines[3].hits as i32,
-                set_lines[4].hits as i32,
-                set_lines[5].hits as i32,
-                set_lines[6].hits as i32,
-                set_lines[7].hits as i32,
-            );
+            // let hits = _mm256_setr_epi32(
+            //     set_lines[0].hits as i32,
+            //     set_lines[1].hits as i32,
+            //     set_lines[2].hits as i32,
+            //     set_lines[3].hits as i32,
+            //     set_lines[4].hits as i32,
+            //     set_lines[5].hits as i32,
+            //     set_lines[6].hits as i32,
+            //     set_lines[7].hits as i32,
+            // );
 
             let valid_bits = _mm256_setr_epi32(
                 (set_lines[0].valid as i32).neg(),
@@ -353,16 +353,16 @@ impl L1Cache {
 
         unsafe {
             // Load hits and valid bits into AVX2 registers
-            let hits = _mm256_setr_epi32(
-                set_lines[0].hits as i32,
-                set_lines[1].hits as i32,
-                set_lines[2].hits as i32,
-                set_lines[3].hits as i32,
-                set_lines[4].hits as i32,
-                set_lines[5].hits as i32,
-                set_lines[6].hits as i32,
-                set_lines[7].hits as i32,
-            );
+            // let hits = _mm256_setr_epi32(
+            //     set_lines[0].hits as i32,
+            //     set_lines[1].hits as i32,
+            //     set_lines[2].hits as i32,
+            //     set_lines[3].hits as i32,
+            //     set_lines[4].hits as i32,
+            //     set_lines[5].hits as i32,
+            //     set_lines[6].hits as i32,
+            //     set_lines[7].hits as i32,
+            // );
 
             let valid_bits = _mm256_setr_epi32(
                 (set_lines[0].valid as i32).neg(),
@@ -571,7 +571,6 @@ mod tests {
                    "Address {} should be cached", i);
         }
 
-        println!("records: {:#?} addresses {:#?}", records, addresses);
         // Modify all cached values
         for (i, addr) in addresses.iter().enumerate() {
             if let Some(cached) = cache.lookup_mut_no_ts_update(*addr) {
@@ -580,9 +579,16 @@ mod tests {
         }
 
         // Access first address multiple times to increase its hits
-        for _ in 0..5 {
-            cache.lookup_no_ts_update(addresses[0]);
+        for &addr in addresses[..L1Cache::WAYS-1].iter() {
+            for _ in 0..5 {
+                cache.lookup_no_ts_update(addr);
+            }
         }
+
+        let target_value =  cache.lookup_no_ts_update(*addresses.last().unwrap()).cloned();
+        let set1 = set_from_addr(addresses[0]);
+        let set_last = set_from_addr(*addresses.last().unwrap());
+        assert_eq!(set1, set_last);
 
         // Insert one more address to force eviction
         let evicting_addr = (base_addr + (L1Cache::WAYS << 14)) as u32;
@@ -598,31 +604,7 @@ mod tests {
         assert!(cache.lookup_no_ts_update(addresses[0]).is_some(),
                "First address should still be cached due to high hits");
 
-        println!("Memory: {:?}", memory);
-
-        assert!(false);
-        // let evicted_addr =4210159616;
-        // if let Some(record) = memory.get(&evicted_addr) {
-        //     if cache.lookup_no_ts_update(evicted_addr).is_some() {
-        //         assert_eq!(record.value, 336,
-        //                     "Modified value should be in memory for address {}", evicted_addr);
-        //     }
-        // } else {
-        //     panic!("Record should exist in memory for address {}", evicted_addr);
-        // }
-        // Verify modified values were written back to memory
-        // for (i, addr) in addresses.iter().enumerate() {
-        //     let set = set_from_addr(*addr);
-        //     println!("cache set {} : {:#?}", set, cache.cache[set]);
-        //     if let Some(record) = memory.get(addr) {
-        //         if cache.lookup_no_ts_update(*addr).is_some() {
-        //             assert_eq!(record.value, (i as u32 + 1) * 100,
-        //                       "Modified value should be in memory for address {}", addr);
-        //         }
-        //     } else {
-        //         panic!("Record should exist in memory for address {}", addr);
-        //     }
-        // }
+        assert_eq!(target_value, memory.get(addresses.last().unwrap()).cloned());
     }
 
     #[test]
@@ -970,7 +952,7 @@ mod tests {
         let mut memory = Memory::new();
 
         // Create three addresses that map to the same set
-        let addrs = create_same_set_addresses(0x1000, 3);
+        let addrs = create_same_set_addresses(0x1000, 9);
 
         // Insert values for all addresses
         for &addr in &addrs {
@@ -978,27 +960,28 @@ mod tests {
         }
 
         // Insert first two addresses
-        cache.insert(addrs[0], &mut memory);
-        cache.insert(addrs[1], &mut memory);
+        for addr in addrs.iter().skip(1) {
+            cache.insert_and_return(*addr, &mut memory);
+        }
 
-        // Access first address to make it MRU
-        assert!(cache.lookup_no_ts_update(addrs[0]).is_some());
+        // Access first 2..WAYS-1 address to make them MRU
+        for addr in addrs.iter().skip(2) {
+            assert!(cache.lookup_no_ts_update(*addr).is_some());
+        }
 
-        // Insert third address - should evict second address (hits)
-        cache.insert(addrs[2], &mut memory);
+        // Insert evicting address - should evict second address (hits)
+        cache.insert_and_return(addrs[0], &mut memory);
 
         // Verify first and third addresses are in cache
+        for addr in addrs.iter().skip(2) {
+            assert!(
+                cache.lookup_no_ts_update(*addr).is_some(),
+                "MRU entry was incorrectly evicted"
+            );
+        }
         assert!(
             cache.lookup_no_ts_update(addrs[1]).is_none(),
-            "hits entry was not evicted"
-        );
-        assert!(
-            cache.lookup_no_ts_update(addrs[0]).is_some(),
-            "MRU entry was incorrectly evicted"
-        );
-        assert!(
-            cache.lookup_no_ts_update(addrs[2]).is_some(),
-            "Newly inserted entry not found"
+            "MRU entry was not evicted"
         );
     }
 }
