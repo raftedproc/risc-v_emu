@@ -9,6 +9,17 @@ use std::{arch::x86_64::*, ops::Neg};
 
 use crate::{events::MemoryRecord, Memory};
 
+#[derive(Debug)]
+pub enum CacheLookupResult<T> {
+    Hit(T),
+    Miss,
+}
+
+fn record_from_memory(addr: u32, memory: &mut Memory) -> Option<MemoryRecord> {
+    memory.get(&addr).cloned()
+}
+
+
 /// A cache line in the L1 cache, representing a block of memory.
 ///
 /// Each cache line contains:
@@ -46,9 +57,6 @@ impl CacheLine {
         }
     }
 
-    fn record_from_memory(addr: u32, memory: &mut Memory) -> Option<MemoryRecord> {
-        memory.get(&addr).cloned()
-    }
 
     /// Creates a new cache line by loading data from memory
     ///
@@ -63,7 +71,7 @@ impl CacheLine {
         let mut data = [None; Self::LINE_SIZE];
         for offset in 0..Self::LINE_SIZE {
             let addr = addr_from_base_addr_offset(base_addr, offset);
-            data[offset] = Self::record_from_memory(addr, memory);
+            data[offset] = record_from_memory(addr, memory);
         }
         Self {
             valid,
@@ -112,18 +120,15 @@ impl L1Cache {
     /// A new L1Cache instance with SETS × WAYS empty cache lines
     pub fn new() -> Self {
         let cache = vec![vec![CacheLine::default(); Self::WAYS]; Self::SETS];
-        Self {
-            cache,
-        }
+        Self { cache }
     }
 
     #[inline(always)]
-    /// Looks up a memory address in the cache using AVX2 SIMD
-    pub fn lookup_no_ts_update(&mut self, addr: u32) -> Option<&MemoryRecord> {
+    pub fn get_cacheline_mut(&mut self, addr: u32) -> Option<&mut CacheLine> {
         let set: usize = set_from_addr(addr);
         let tag = tag_from_addr(addr);
         let set_lines = unsafe { self.cache.get_unchecked_mut(set) };
-        
+
         unsafe {
             // Load tags and valid bits into AVX2 registers
             let tags = _mm256_setr_epi32(
@@ -136,7 +141,7 @@ impl L1Cache {
                 set_lines[6].tag as i32,
                 set_lines[7].tag as i32,
             );
-            
+
             let valid_bits = _mm256_setr_epi32(
                 (set_lines[0].valid as i32).neg(),
                 (set_lines[1].valid as i32).neg(),
@@ -147,143 +152,59 @@ impl L1Cache {
                 (set_lines[6].valid as i32).neg(),
                 (set_lines[7].valid as i32).neg(),
             );
-            
 
-            // println!("tags: {:?}", tags);
-            // let b = _mm256_set1_epi32(tag as i32);
-            // println!("b: {:?}", b);
+            // if addr == 2091468 {
+            //     println!("tags: {:?}", tags);
+            //     let b = _mm256_set1_epi32(tag as i32);
+            //     println!("b: {:?}", b);
+            // }
             // Compare tags
             let tag_match = _mm256_cmpeq_epi32(tags, _mm256_set1_epi32(tag as i32));
             let valid_match = _mm256_and_si256(tag_match, valid_bits);
             let mask = _mm256_movemask_ps(_mm256_castsi256_ps(valid_match)) as u32;
-            // println!("tag: {:?}", tag);
-            // println!("tag_match: {:?}", tag_match);
-            // println!("valid_match: {:?}", valid_match);
-            // println!("mask: {:?}", mask);
+            // if addr == 2091468 {
+            //     println!("tag: {:?}", tag);
+            //     println!("tag_match: {:?}", tag_match);
+            //     println!("valid_match: {:?}", valid_match);
+            //     println!("mask: {:?}", mask);
+            // }
+
             if mask != 0 {
                 // Find first matching way
                 let way = mask.trailing_zeros() as usize;
                 set_lines[way].hits += 1;
-                let offset = offset_from_addr(addr);
-                return set_lines[way].data[offset].as_ref();
+                // let offset = offset_from_addr(addr);
+                return Some(&mut set_lines[way]);
             }
         }
         None
     }
 
     #[inline(always)]
-    pub fn lookup_mut_no_ts_update(&mut self, addr: u32) -> Option<&mut MemoryRecord> {
-        let set: usize = set_from_addr(addr);
-        let tag = tag_from_addr(addr);
-        let set_lines = unsafe { self.cache.get_unchecked_mut(set) };
-        
-        unsafe {
-            // Load tags and valid bits into AVX2 registers
-            let tags = _mm256_setr_epi32(
-                set_lines[0].tag as i32,
-                set_lines[1].tag as i32,
-                set_lines[2].tag as i32,
-                set_lines[3].tag as i32,
-                set_lines[4].tag as i32,
-                set_lines[5].tag as i32,
-                set_lines[6].tag as i32,
-                set_lines[7].tag as i32,
-            );
-            
-            let valid_bits = _mm256_setr_epi32(
-                (set_lines[0].valid as i32).neg(),
-                (set_lines[1].valid as i32).neg(),
-                (set_lines[2].valid as i32).neg(),
-                (set_lines[3].valid as i32).neg(),
-                (set_lines[4].valid as i32).neg(),
-                (set_lines[5].valid as i32).neg(),
-                (set_lines[6].valid as i32).neg(),
-                (set_lines[7].valid as i32).neg(),
-            );
-            
-            // Compare tags
-            let tag_match = _mm256_cmpeq_epi32(tags, _mm256_set1_epi32(tag as i32));
-            let valid_match = _mm256_and_si256(tag_match, valid_bits);
-            let mask = _mm256_movemask_ps(_mm256_castsi256_ps(valid_match)) as u32;
-            
-            if mask != 0 {
-                // Find first matching way
-                let way = mask.trailing_zeros() as usize;
-                set_lines[way].hits += 1;
+    pub fn get(&mut self, addr: u32) -> CacheLookupResult<Option<&MemoryRecord>> {
+        let cacheline = self.get_cacheline_mut(addr);
+        match cacheline {
+            Some(cacheline) => {
                 let offset = offset_from_addr(addr);
-                return set_lines[way].data[offset].as_mut();
+                CacheLookupResult::Hit(cacheline.data[offset].as_ref())
             }
+            None => CacheLookupResult::Miss,
         }
-        None
     }
 
     #[inline(always)]
-    /// Inserts a new cache line for the given address using AVX2 SIMD
-    ///
-    /// Uses hits-based replacement policy to choose which way to evict
-    /// when all ways in a set are occupied. The evicted line is written back to memory
-    /// if it contains valid data.
-    ///
-    /// # Arguments
-    /// * `addr` - Memory address to cache
-    /// * `memory` - Memory to load data from
-    pub fn insert(&mut self, addr: u32, memory: &mut Memory) {
-        let set = set_from_addr(addr);
-        let tag = tag_from_addr(addr);
-        let base_addr = addr & !(CacheLine::LINE_SIZE * 4 - 1) as u32;
-        let set_lines = unsafe { self.cache.get_unchecked_mut(set) };
-
-        unsafe {
-            // Load hits into AVX2 register
-            // let hits = _mm256_setr_epi32(
-            //     set_lines[0].hits as i32,
-            //     set_lines[1].hits as i32,
-            //     set_lines[2].hits as i32,
-            //     set_lines[3].hits as i32,
-            //     set_lines[4].hits as i32,
-            //     set_lines[5].hits as i32,
-            //     set_lines[6].hits as i32,
-            //     set_lines[7].hits as i32,
-            // );
-
-            // Load valid bits into AVX2 register
-            let valid_bits = _mm256_setr_epi32(
-                (set_lines[0].valid as i32).neg(),
-                (set_lines[1].valid as i32).neg(),
-                (set_lines[2].valid as i32).neg(),
-                (set_lines[3].valid as i32).neg(),
-                (set_lines[4].valid as i32).neg(),
-                (set_lines[5].valid as i32).neg(),
-                (set_lines[6].valid as i32).neg(),
-                (set_lines[7].valid as i32).neg(),
-            );
-
-            // Find invalid or least recently used way
-            let invalid_mask = _mm256_xor_si256(valid_bits, _mm256_set1_epi32(-1));
-            let invalid_bits = _mm256_movemask_ps(_mm256_castsi256_ps(invalid_mask)) as u32;
-
-            let way = if invalid_bits != 0 {
-                // Use first invalid way if available
-                invalid_bits.trailing_zeros() as usize
-            } else {
-                // Find way with lowest hits
-                let mut min_hits = u8::MAX;
-                let mut min_way = 0;
-                for way in 0..Self::WAYS {
-                    if set_lines[way].hits < min_hits {
-                        min_hits = set_lines[way].hits;
-                        min_way = way;
-                    }
-                }
-                min_way
-            };
-
-            store_cacheline_if_needed(&set_lines[way], memory);
-            let new_cacheline = CacheLine::from_memory(tag, base_addr, memory);
-            set_lines[way] = new_cacheline;
+    pub fn get_mut(&mut self, addr: u32) -> CacheLookupResult<Option<&mut MemoryRecord>> {
+        let cacheline = self.get_cacheline_mut(addr);
+        match cacheline {
+            Some(cacheline) => {
+                let offset = offset_from_addr(addr);
+                CacheLookupResult::Hit(cacheline.data[offset].as_mut())
+            }
+            None => CacheLookupResult::Miss,
         }
     }
 
+    #[inline(always)]
     pub fn insert_and_return(&mut self, addr: u32, memory: &mut Memory) -> Option<&MemoryRecord> {
         let set = set_from_addr(addr);
         let tag = tag_from_addr(addr);
@@ -292,18 +213,6 @@ impl L1Cache {
         let set_lines = unsafe { self.cache.get_unchecked_mut(set) };
 
         unsafe {
-            // Load hits and valid bits into AVX2 registers
-            // let hits = _mm256_setr_epi32(
-            //     set_lines[0].hits as i32,
-            //     set_lines[1].hits as i32,
-            //     set_lines[2].hits as i32,
-            //     set_lines[3].hits as i32,
-            //     set_lines[4].hits as i32,
-            //     set_lines[5].hits as i32,
-            //     set_lines[6].hits as i32,
-            //     set_lines[7].hits as i32,
-            // );
-
             let valid_bits = _mm256_setr_epi32(
                 (set_lines[0].valid as i32).neg(),
                 (set_lines[1].valid as i32).neg(),
@@ -315,21 +224,58 @@ impl L1Cache {
                 (set_lines[7].valid as i32).neg(),
             );
 
+            let tags = _mm256_setr_epi32(
+                set_lines[0].tag as i32,
+                set_lines[1].tag as i32,
+                set_lines[2].tag as i32,
+                set_lines[3].tag as i32,
+                set_lines[4].tag as i32,
+                set_lines[5].tag as i32,
+                set_lines[6].tag as i32,
+                set_lines[7].tag as i32,
+            );
+
+            let tag_match = _mm256_cmpeq_epi32(tags, _mm256_set1_epi32(tag as i32));
+            let valid_match = _mm256_and_si256(tag_match, valid_bits);
+            let mask = _mm256_movemask_ps(_mm256_castsi256_ps(valid_match)) as u32;
+            if mask != 0 {
+                // println!("mask: {:08b}", mask);
+                // Find first matching way
+                let way = mask.trailing_zeros() as usize;
+                // let new_cacheline = CacheLine::from_memory(tag, base_addr, memory);
+                let memory_record = record_from_memory(addr, memory);
+                set_lines[way].data[offset] = memory_record;
+                // self.update_if_in_cache(addr, memory_record);
+                // store_cacheline_if_needed(&set_lines[way], memory); // WIP
+                // set_lines[way] = new_cacheline;
+                return set_lines[way].data[offset].as_ref();
+            }
+
             // Find invalid or least recently used way
             let invalid_mask = _mm256_xor_si256(valid_bits, _mm256_set1_epi32(-1));
+            // println!("invalid_mask: {:?}", invalid_mask);
             let invalid_bits = _mm256_movemask_ps(_mm256_castsi256_ps(invalid_mask)) as u32;
 
+            // println!("invalid_bits: {:08b}", invalid_bits);
             let way = if invalid_bits != 0 {
                 // Use first invalid way if available
                 invalid_bits.trailing_zeros() as usize
             } else {
-                // Find way with lowest hits
+                // Find way with lowest hits or same tag || base_addr.
                 let mut min_hits = u8::MAX;
                 let mut min_way = 0;
                 for way in 0..Self::WAYS {
                     if set_lines[way].hits < min_hits {
                         min_hits = set_lines[way].hits;
                         min_way = way;
+                    }
+                    // println!(
+                    //     "way {} tag {} base_addr {}",
+                    //     way, set_lines[way].tag, set_lines[way].base_addr
+                    // );
+                    if set_lines[way].tag == tag || set_lines[way].base_addr == base_addr {
+                        min_way = way;
+                        break;
                     }
                 }
                 min_way
@@ -344,7 +290,12 @@ impl L1Cache {
         }
     }
 
-    pub fn insert_and_return_mut(&mut self, addr: u32, memory: &mut Memory) -> Option<&mut MemoryRecord> {
+    #[inline(always)]
+    pub fn insert_and_return_mut(
+        &mut self,
+        addr: u32,
+        memory: &mut Memory,
+    ) -> Option<&mut MemoryRecord> {
         let set = set_from_addr(addr);
         let tag = tag_from_addr(addr);
         let offset = offset_from_addr(addr);
@@ -352,18 +303,6 @@ impl L1Cache {
         let set_lines = unsafe { self.cache.get_unchecked_mut(set) };
 
         unsafe {
-            // Load hits and valid bits into AVX2 registers
-            // let hits = _mm256_setr_epi32(
-            //     set_lines[0].hits as i32,
-            //     set_lines[1].hits as i32,
-            //     set_lines[2].hits as i32,
-            //     set_lines[3].hits as i32,
-            //     set_lines[4].hits as i32,
-            //     set_lines[5].hits as i32,
-            //     set_lines[6].hits as i32,
-            //     set_lines[7].hits as i32,
-            // );
-
             let valid_bits = _mm256_setr_epi32(
                 (set_lines[0].valid as i32).neg(),
                 (set_lines[1].valid as i32).neg(),
@@ -375,15 +314,41 @@ impl L1Cache {
                 (set_lines[7].valid as i32).neg(),
             );
 
+            let tags = _mm256_setr_epi32(
+                set_lines[0].tag as i32,
+                set_lines[1].tag as i32,
+                set_lines[2].tag as i32,
+                set_lines[3].tag as i32,
+                set_lines[4].tag as i32,
+                set_lines[5].tag as i32,
+                set_lines[6].tag as i32,
+                set_lines[7].tag as i32,
+            );
+
+            let tag_match = _mm256_cmpeq_epi32(tags, _mm256_set1_epi32(tag as i32));
+            let valid_match = _mm256_and_si256(tag_match, valid_bits);
+            let mask = _mm256_movemask_ps(_mm256_castsi256_ps(valid_match)) as u32;
+            if mask != 0 {
+                let way = mask.trailing_zeros() as usize;
+                // let new_cacheline = CacheLine::from_memory(tag, base_addr, memory);
+                // store_cacheline_if_needed(&set_lines[way], memory); // WIP
+                // set_lines[way] = new_cacheline;
+                let memory_record = record_from_memory(addr, memory);
+                set_lines[way].data[offset] = memory_record;
+                return set_lines[way].data[offset].as_mut();
+            }
+
             // Find invalid or least recently used way
             let invalid_mask = _mm256_xor_si256(valid_bits, _mm256_set1_epi32(-1));
+            // println!("invalid_mask: {:?}", invalid_mask);
             let invalid_bits = _mm256_movemask_ps(_mm256_castsi256_ps(invalid_mask)) as u32;
 
+            // println!("invalid_bits: {:08b}", invalid_bits);
             let way = if invalid_bits != 0 {
                 // Use first invalid way if available
                 invalid_bits.trailing_zeros() as usize
             } else {
-                // Find way with lowest hits
+                // Find way with lowest hits or same tag || base_addr.
                 let mut min_hits = u8::MAX;
                 let mut min_way = 0;
                 for way in 0..Self::WAYS {
@@ -391,9 +356,19 @@ impl L1Cache {
                         min_hits = set_lines[way].hits;
                         min_way = way;
                     }
+                    // println!(
+                    //     "way {} tag {} base_addr {}",
+                    //     way, set_lines[way].tag, set_lines[way].base_addr
+                    // );
+                    if set_lines[way].tag == tag || set_lines[way].base_addr == base_addr {
+                        min_way = way;
+                        break;
+                    }
                 }
                 min_way
             };
+
+            // println!("insert_and_return addr {:?}, set {} replacing way {}", addr, set, way);
 
             store_cacheline_if_needed(&set_lines[way], memory);
             let new_cacheline = CacheLine::from_memory(tag, base_addr, memory);
@@ -405,30 +380,11 @@ impl L1Cache {
     #[inline(always)]
     /// updates MemoryRecord for a specific addr
     /// Used by ExitUnconstrainedSyscall to sync memory
-    pub fn update_if_in_cache(&mut self, addr: u32, memory_record: MemoryRecord) {
-        let set = set_from_addr(addr);
-        let tag = tag_from_addr(addr);
-
-        let set_lines = unsafe { self.cache.get_unchecked_mut(set) };
-
-        let cacheline = if set_lines[0].tag == tag {
-            &mut set_lines[0]
-        } else if set_lines[1].tag == tag {
-            &mut set_lines[1]
-        } else {
-            return;
-        };
-
-        let offset = offset_from_addr(addr);
-        cacheline.data[offset] = Some(memory_record);
-    }
-
-    #[inline(always)]
-    /// erases MemoryRecord for a specific addr
-    /// Used by ExitUnconstrainedSyscall to sync memory
-    pub fn erase_if_in_cache(&mut self, addr: u32) {
-        let memory_record = MemoryRecord::default();
-        self.update_if_in_cache(addr, memory_record);
+    pub fn update_if_in_cache(&mut self, addr: u32, memory_record: Option<MemoryRecord>) {
+        if let Some(cacheline) = self.get_cacheline_mut(addr) {
+            let offset = offset_from_addr(addr);
+            cacheline.data[offset] = memory_record;
+        }
     }
 }
 
@@ -494,6 +450,31 @@ pub fn addr_from_base_addr_offset(base_addr: u32, offset: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_same_base_addr_mapping() {
+        let mut cache = L1Cache::new();
+        let mut memory = Memory::new();
+
+        // Create two addresses in the same cache line (same base address)
+        let base_addr = 2091468;
+        let addr1 = base_addr;
+
+        // Create memory records
+        let record1 = MemoryRecord {
+            value: 1234,
+            shard: 0,
+            timestamp: 0,
+        };
+        memory.insert(addr1, record1.clone());
+
+        // Insert first record and verify it's in cache
+        cache.insert_and_return(addr1, &mut memory);
+        cache.insert_and_return(addr1, &mut memory);
+
+        let set = set_from_addr(addr1);
+        println!("cache set: {:?}", cache.cache[set]);
+    }
 
     // Helper function to create addresses that map to the same cache set
     fn create_same_set_addresses(base: u32, count: u32) -> Vec<u32> {
@@ -567,25 +548,30 @@ mod tests {
             cache.insert_and_return(addr, &mut memory);
 
             // Verify it's cached
-            assert!(cache.lookup_no_ts_update(addr).is_some(), 
-                   "Address {} should be cached", i);
+            match cache.get(addr) {
+                CacheLookupResult::Hit(Some(_)) => {},
+                _ => panic!("Address {} should be cached", i)
+            }
         }
 
         // Modify all cached values
         for (i, addr) in addresses.iter().enumerate() {
-            if let Some(cached) = cache.lookup_mut_no_ts_update(*addr) {
+            if let CacheLookupResult::Hit(Some(cached)) = cache.get_mut(*addr) {
                 cached.value = (i as u32 + 1) * 100;
             }
         }
 
         // Access first address multiple times to increase its hits
-        for &addr in addresses[..L1Cache::WAYS-1].iter() {
+        for &addr in addresses[..L1Cache::WAYS - 1].iter() {
             for _ in 0..5 {
-                cache.lookup_no_ts_update(addr);
+                cache.get(addr);
             }
         }
 
-        let target_value =  cache.lookup_no_ts_update(*addresses.last().unwrap()).cloned();
+        let target_value = match cache.get(*addresses.last().unwrap()) {
+            CacheLookupResult::Hit(value) => value.cloned(),
+            CacheLookupResult::Miss => None
+        };
         let set1 = set_from_addr(addresses[0]);
         let set_last = set_from_addr(*addresses.last().unwrap());
         assert_eq!(set1, set_last);
@@ -601,8 +587,10 @@ mod tests {
         cache.insert_and_return(evicting_addr, &mut memory);
 
         // First address should still be cached due to high hits
-        assert!(cache.lookup_no_ts_update(addresses[0]).is_some(),
-               "First address should still be cached due to high hits");
+        assert!(
+            matches!(cache.get(addresses[0]), CacheLookupResult::Hit(Some(_))),
+            "First address should still be cached due to high hits"
+        );
 
         assert_eq!(target_value, memory.get(addresses.last().unwrap()).cloned());
     }
@@ -611,7 +599,7 @@ mod tests {
     fn test_l1cache_lookup_miss() {
         let mut cache = L1Cache::new();
         let addr = 0x1000;
-        assert!(cache.lookup_no_ts_update(addr).is_none());
+        assert!(matches!(cache.get(addr), CacheLookupResult::Miss));
     }
 
     #[test]
@@ -632,14 +620,15 @@ mod tests {
         }
 
         // Insert first address - should load entire cache line
-        cache.insert(base_addr, &mut memory);
+        cache.insert_and_return(base_addr, &mut memory);
 
         // Verify all addresses in the cache line are cached
         for (i, &val) in values.iter().enumerate() {
             let addr = base_addr + (i * WORD_SIZE) as u32;
-            let record = cache
-                .lookup_no_ts_update(addr)
-                .expect("Address should be cached");
+            let record = match cache.get(addr) {
+                CacheLookupResult::Hit(Some(record)) => record,
+                _ => panic!("Address should be cached")
+            };
             assert_eq!(record.value, val, "Cached value mismatch");
         }
     }
@@ -653,11 +642,11 @@ mod tests {
         memory.insert(addr, value);
 
         // Insert into cache
-        cache.insert(addr, &mut memory);
+        cache.insert_and_return(addr, &mut memory);
 
         // Verify lookup succeeds
-        let result = cache.lookup_no_ts_update(addr);
-        assert!(result.is_some());
+        let result = cache.get(addr);
+        assert!(matches!(result, CacheLookupResult::Hit(Some(_))));
     }
 
     #[test]
@@ -677,10 +666,10 @@ mod tests {
                 value: addr,
             };
             memory.insert(addr, record);
-            cache.insert(addr, &mut memory);
+            cache.insert_and_return(addr, &mut memory);
 
             assert!(
-                cache.lookup_no_ts_update(addr).is_some(),
+                matches!(cache.get(addr), CacheLookupResult::Hit(Some(_))),
                 "Failed to cache address {:#x}",
                 addr
             );
@@ -708,7 +697,7 @@ mod tests {
             value: 42,
         };
         memory.insert(addr1, record1);
-        cache.insert(addr1, &mut memory);
+        cache.insert_and_return(addr1, &mut memory);
 
         // Insert second address
         let record2 = MemoryRecord {
@@ -717,16 +706,18 @@ mod tests {
             value: 84,
         };
         memory.insert(addr2, record2);
-        cache.insert(addr2, &mut memory);
+        cache.insert_and_return(addr2, &mut memory);
 
         // Both should be in cache (8-way set associative)
-        let cached1 = cache
-            .lookup_no_ts_update(addr1)
-            .expect("First address should be cached");
+        let cached1 = match cache.get(addr1) {
+            CacheLookupResult::Hit(Some(record)) => record,
+            _ => panic!("First address should be cached")
+        };
         assert_eq!(*cached1, record1);
-        let cached2 = cache
-            .lookup_no_ts_update(addr2)
-            .expect("Second address should be cached");
+        let cached2 = match cache.get(addr2) {
+            CacheLookupResult::Hit(Some(record)) => record,
+            _ => panic!("Second address should be cached")
+        };
         assert_eq!(*cached2, record2);
 
         // Add 6 more addresses to the same set to verify 8-way capacity
@@ -738,17 +729,24 @@ mod tests {
                 value: i as u32 * 42,
             };
             memory.insert(addr, record);
-            cache.insert(addr, &mut memory);
+            cache.insert_and_return(addr, &mut memory);
 
             // Verify it's cached
-            let cached = cache
-                .lookup_no_ts_update(addr)
-                .expect("Address should be cached");
+            let cached = match cache.get(addr) {
+                CacheLookupResult::Hit(Some(record)) => record,
+                _ => panic!("Address should be cached")
+            };
             assert_eq!(*cached, record);
 
             // Previous addresses should still be cached
-            assert!(cache.lookup_no_ts_update(addr1).is_some(), "First address should still be cached");
-            assert!(cache.lookup_no_ts_update(addr2).is_some(), "Second address should still be cached");
+            assert!(
+                matches!(cache.get(addr1), CacheLookupResult::Hit(Some(_))),
+                "First address should still be cached"
+            );
+            assert!(
+                matches!(cache.get(addr2), CacheLookupResult::Hit(Some(_))),
+                "Second address should still be cached"
+            );
         }
     }
 
@@ -765,8 +763,8 @@ mod tests {
             for way in 0..L1Cache::WAYS {
                 let addr = ((set << 5) | (way << 14)) as u32;
                 memory.insert(addr, record);
-                cache.insert(addr, &mut memory);
-                if cache.lookup_no_ts_update(addr).is_some() {
+                cache.insert_and_return(addr, &mut memory);
+                if matches!(cache.get(addr), CacheLookupResult::Hit(Some(_))) {
                     hits += 1;
                 }
             }
@@ -787,11 +785,11 @@ mod tests {
 
         // Try to cache an address that doesn't exist in memory
         let addr = 0x1000;
-        cache.insert(addr, &mut memory);
+        cache.insert_and_return(addr, &mut memory);
 
         // Should still create a cache line with default values
         assert!(
-            cache.lookup_no_ts_update(addr).is_none(),
+            matches!(cache.get(addr), CacheLookupResult::Miss),
             "There must be None in memory for the addr {}",
             addr
         );
@@ -817,13 +815,13 @@ mod tests {
 
         // Access in interleaved pattern
         for &addr in &addrs {
-            cache.insert(addr, &mut memory);
+            cache.insert_and_return(addr, &mut memory);
         }
 
         // Verify all addresses still cached
         for &addr in &addrs {
             assert!(
-                cache.lookup_no_ts_update(addr).is_some(),
+                matches!(cache.get(addr), CacheLookupResult::Hit(Some(_))),
                 "Address should be cached {:#x}",
                 addr
             );
@@ -839,26 +837,26 @@ mod tests {
         let base_addr = 0x1000; // Set 0x80
         let record = MemoryRecord::default();
         memory.insert(base_addr, record);
-        cache.insert(base_addr, &mut memory);
+        cache.insert_and_return(base_addr, &mut memory);
 
         // Verify first cache hit
         assert!(
-            cache.lookup_no_ts_update(base_addr).is_some(),
+            matches!(cache.get(base_addr), CacheLookupResult::Hit(Some(_))),
             "First address should be cached"
         );
 
         // Add second address to same set
         let second_addr = base_addr + (1 << 14); // Same set, different tag
         memory.insert(second_addr, record);
-        cache.insert(second_addr, &mut memory);
+        cache.insert_and_return(second_addr, &mut memory);
 
         // Both addresses should still be cached (8-way set associative)
         assert!(
-            cache.lookup_no_ts_update(base_addr).is_some(),
+            matches!(cache.get(base_addr), CacheLookupResult::Hit(Some(_))),
             "First address should still be cached"
         );
         assert!(
-            cache.lookup_no_ts_update(second_addr).is_some(),
+            matches!(cache.get(second_addr), CacheLookupResult::Hit(Some(_))),
             "Second address should be cached"
         );
 
@@ -866,31 +864,28 @@ mod tests {
         for i in 2..8 {
             let addr = base_addr + (i << 14); // Same set, different tag
             memory.insert(addr, record);
-            cache.insert(addr, &mut memory);
-            assert!(
-                cache.lookup_no_ts_update(addr).is_some(),
-                "Address {} should be cached", i
-            );
+            cache.insert_and_return(addr, &mut memory);
+            assert!(matches!(cache.get(addr), CacheLookupResult::Hit(Some(_))), "Address {} should be cached", i);
         }
 
         // Access first address multiple times to increase its hits
         for _ in 0..5 {
-            cache.lookup_no_ts_update(base_addr);
+            cache.get(base_addr);
         }
 
         // Add ninth address to same set - should evict the least recently used address
         let ninth_addr = base_addr + (8 << 14); // Same set, different tag
         memory.insert(ninth_addr, record);
-        cache.insert(ninth_addr, &mut memory);
+        cache.insert_and_return(ninth_addr, &mut memory);
 
         // First address should still be cached due to high hits count
         assert!(
-            cache.lookup_no_ts_update(base_addr).is_some(),
+            matches!(cache.get(base_addr), CacheLookupResult::Hit(Some(_))),
             "First address should still be cached due to high hits"
         );
         // Ninth address should be cached
         assert!(
-            cache.lookup_no_ts_update(ninth_addr).is_some(),
+            matches!(cache.get(ninth_addr), CacheLookupResult::Hit(Some(_))),
             "Ninth address should be cached"
         );
     }
@@ -904,8 +899,15 @@ mod tests {
         let addrs = create_same_set_addresses(0x1000, L1Cache::WAYS as u32 + 1);
 
         // Insert initial values into memory
-        for &addr in &addrs {
-            memory.insert(addr, MemoryRecord::default());
+        for (i, &addr) in addrs.iter().enumerate() {
+            memory.insert(
+                addr,
+                MemoryRecord {
+                    shard: 0,
+                    timestamp: 0,
+                    value: (i + 1) as u32,
+                },
+            );
         }
 
         // Insert all addresses into cache
@@ -915,28 +917,29 @@ mod tests {
 
         // All addresses except the first one should be cached (8-way set)
         for &addr in addrs[1..].iter() {
-            println!("addr {}", addr);
-            let set = set_from_addr(addr);
-            println!("memory {:?}", memory);
-            println!("cache {:?}", cache.cache[set]);
-            println!("lookup result {:?}", cache.lookup_no_ts_update(addr));
             assert!(
-                cache.lookup_no_ts_update(addr).is_some(),
-                "Address {} should be cached", addr
+                matches!(cache.get(addr), CacheLookupResult::Hit(Some(_))),
+                "Address {} should be cached",
+                addr
             );
         }
         // Last address (WAYS + 1) should have evicted one of the previous addresses
         assert!(
-            cache.lookup_no_ts_update(addrs[L1Cache::WAYS]).is_some(),
+            matches!(cache.get(addrs[L1Cache::WAYS]), CacheLookupResult::Hit(Some(_))),
             "Last address should be cached"
         );
         assert!(
-            cache.lookup_no_ts_update(addrs[2]).is_some(),
+            matches!(cache.get(addrs[2]), CacheLookupResult::Hit(Some(_))),
             "2nd address should still has been evicted"
         );
         assert!(
-            cache.lookup_no_ts_update(addrs[2]).is_some(),
+            matches!(cache.get(addrs[2]), CacheLookupResult::Hit(Some(_))),
             "3d address should still be cached"
+        );
+
+        assert!(
+            matches!(cache.get(addrs[0]), CacheLookupResult::Miss),
+            "First address must be not in cache"
         );
 
         // Verify memory consistency after eviction
@@ -944,6 +947,11 @@ mod tests {
             memory.contains_key(&addrs[0]),
             "Evicted address should still be in memory"
         );
+        println!("memory {:?}", memory);
+        // println!("cache {:?}", cache.cache[set]);
+        // println!("lookup result {:?}", cache.get(addr));
+        println!("addr {}", addrs[0]);
+        println!("memory lookup result {:?}", memory.get(&addrs[0]));
     }
 
     #[test]
@@ -966,7 +974,7 @@ mod tests {
 
         // Access first 2..WAYS-1 address to make them MRU
         for addr in addrs.iter().skip(2) {
-            assert!(cache.lookup_no_ts_update(*addr).is_some());
+            assert!(matches!(cache.get(*addr), CacheLookupResult::Hit(Some(_))));
         }
 
         // Insert evicting address - should evict second address (hits)
@@ -975,13 +983,28 @@ mod tests {
         // Verify first and third addresses are in cache
         for addr in addrs.iter().skip(2) {
             assert!(
-                cache.lookup_no_ts_update(*addr).is_some(),
+                matches!(cache.get(*addr), CacheLookupResult::Hit(Some(_))),
                 "MRU entry was incorrectly evicted"
             );
         }
-        assert!(
-            cache.lookup_no_ts_update(addrs[1]).is_none(),
-            "MRU entry was not evicted"
-        );
+        assert!(matches!(cache.get(addrs[1]), CacheLookupResult::Miss), "MRU entry was not evicted");
+    }
+
+    #[test]
+    fn test_empty_read() {
+        let mut cache = L1Cache::new();
+        let mut memory = Memory::new();
+
+        // Create three addresses that map to the same set
+
+        let addr = 0x2000;
+
+        cache.insert_and_return(addr, &mut memory);
+        memory.insert(addr, MemoryRecord::default());
+        let set = set_from_addr(addr);
+        println!("cache {:?}", cache.cache[set]);
+        println!("memory after {:?}", memory);
+
+        assert!(matches!(cache.get(addr), CacheLookupResult::Hit(Some(_))));
     }
 }

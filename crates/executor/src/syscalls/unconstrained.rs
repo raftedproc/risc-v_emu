@@ -40,13 +40,12 @@ impl Syscall for ExitUnconstrainedSyscall {
                 match value {
                     Some(value) => {
                         ctx.rt.state.memory.insert(addr, value);
-                        ctx.rt.state.l1_cache.update_if_in_cache(addr, value);
                     }
                     None => {
                         ctx.rt.state.memory.remove(&addr);
-                        ctx.rt.state.l1_cache.erase_if_in_cache(addr);
                     }
                 }
+                ctx.rt.state.l1_cache.update_if_in_cache(addr, value);
             }
             // ctx.rt.record = std::mem::take(&mut ctx.rt.unconstrained_state.record);
             // ctx.rt.memory_accesses = std::mem::take(&mut ctx.rt.unconstrained_state.op_record);
