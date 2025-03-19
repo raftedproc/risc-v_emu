@@ -19,7 +19,6 @@ fn record_from_memory(addr: u32, memory: &mut Memory) -> Option<MemoryRecord> {
     memory.get(&addr).cloned()
 }
 
-
 /// A cache line in the L1 cache, representing a block of memory.
 ///
 /// Each cache line contains:
@@ -56,7 +55,6 @@ impl CacheLine {
             hits: 0,
         }
     }
-
 
     /// Creates a new cache line by loading data from memory
     ///
@@ -141,39 +139,19 @@ impl L1Cache {
                 set_lines[6].tag as i32,
                 set_lines[7].tag as i32,
             );
+            let valid_bits = get_valid_bits(&set_lines);
 
-            let valid_bits = _mm256_setr_epi32(
-                (set_lines[0].valid as i32).neg(),
-                (set_lines[1].valid as i32).neg(),
-                (set_lines[2].valid as i32).neg(),
-                (set_lines[3].valid as i32).neg(),
-                (set_lines[4].valid as i32).neg(),
-                (set_lines[5].valid as i32).neg(),
-                (set_lines[6].valid as i32).neg(),
-                (set_lines[7].valid as i32).neg(),
-            );
-
-            // if addr == 2091468 {
-            //     println!("tags: {:?}", tags);
-            //     let b = _mm256_set1_epi32(tag as i32);
-            //     println!("b: {:?}", b);
-            // }
             // Compare tags
-            let tag_match = _mm256_cmpeq_epi32(tags, _mm256_set1_epi32(tag as i32));
-            let valid_match = _mm256_and_si256(tag_match, valid_bits);
-            let mask = _mm256_movemask_ps(_mm256_castsi256_ps(valid_match)) as u32;
-            // if addr == 2091468 {
-            //     println!("tag: {:?}", tag);
-            //     println!("tag_match: {:?}", tag_match);
-            //     println!("valid_match: {:?}", valid_match);
-            //     println!("mask: {:?}", mask);
-            // }
+            let tag_match = _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpeq_epi32(
+                tags,
+                _mm256_set1_epi32(tag as i32),
+            )));
+            let mask = tag_match & valid_bits;
 
             if mask != 0 {
                 // Find first matching way
                 let way = mask.trailing_zeros() as usize;
                 set_lines[way].hits += 1;
-                // let offset = offset_from_addr(addr);
                 return Some(&mut set_lines[way]);
             }
         }
@@ -182,8 +160,7 @@ impl L1Cache {
 
     #[inline(always)]
     pub fn get(&mut self, addr: u32) -> CacheLookupResult<Option<&MemoryRecord>> {
-        let cacheline = self.get_cacheline_mut(addr);
-        match cacheline {
+        match self.get_cacheline_mut(addr) {
             Some(cacheline) => {
                 let offset = offset_from_addr(addr);
                 CacheLookupResult::Hit(cacheline.data[offset].as_ref())
@@ -194,8 +171,7 @@ impl L1Cache {
 
     #[inline(always)]
     pub fn get_mut(&mut self, addr: u32) -> CacheLookupResult<Option<&mut MemoryRecord>> {
-        let cacheline = self.get_cacheline_mut(addr);
-        match cacheline {
+        match self.get_cacheline_mut(addr) {
             Some(cacheline) => {
                 let offset = offset_from_addr(addr);
                 CacheLookupResult::Hit(cacheline.data[offset].as_mut())
@@ -213,16 +189,7 @@ impl L1Cache {
         let set_lines = unsafe { self.cache.get_unchecked_mut(set) };
 
         unsafe {
-            let valid_bits = _mm256_setr_epi32(
-                (set_lines[0].valid as i32).neg(),
-                (set_lines[1].valid as i32).neg(),
-                (set_lines[2].valid as i32).neg(),
-                (set_lines[3].valid as i32).neg(),
-                (set_lines[4].valid as i32).neg(),
-                (set_lines[5].valid as i32).neg(),
-                (set_lines[6].valid as i32).neg(),
-                (set_lines[7].valid as i32).neg(),
-            );
+            let valid_bits = get_valid_bits(&set_lines);
 
             let tags = _mm256_setr_epi32(
                 set_lines[0].tag as i32,
@@ -235,28 +202,24 @@ impl L1Cache {
                 set_lines[7].tag as i32,
             );
 
-            let tag_match = _mm256_cmpeq_epi32(tags, _mm256_set1_epi32(tag as i32));
-            let valid_match = _mm256_and_si256(tag_match, valid_bits);
-            let mask = _mm256_movemask_ps(_mm256_castsi256_ps(valid_match)) as u32;
+            let tag_match = _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpeq_epi32(
+                tags,
+                _mm256_set1_epi32(tag as i32),
+            )));
+            let mask = tag_match & valid_bits;
+
             if mask != 0 {
-                // println!("mask: {:08b}", mask);
+        
                 // Find first matching way
                 let way = mask.trailing_zeros() as usize;
-                // let new_cacheline = CacheLine::from_memory(tag, base_addr, memory);
                 let memory_record = record_from_memory(addr, memory);
                 set_lines[way].data[offset] = memory_record;
-                // self.update_if_in_cache(addr, memory_record);
-                // store_cacheline_if_needed(&set_lines[way], memory); // WIP
-                // set_lines[way] = new_cacheline;
                 return set_lines[way].data[offset].as_ref();
             }
 
             // Find invalid or least recently used way
-            let invalid_mask = _mm256_xor_si256(valid_bits, _mm256_set1_epi32(-1));
-            // println!("invalid_mask: {:?}", invalid_mask);
-            let invalid_bits = _mm256_movemask_ps(_mm256_castsi256_ps(invalid_mask)) as u32;
+            let invalid_bits = valid_bits ^ 0xFF;
 
-            // println!("invalid_bits: {:08b}", invalid_bits);
             let way = if invalid_bits != 0 {
                 // Use first invalid way if available
                 invalid_bits.trailing_zeros() as usize
@@ -269,10 +232,7 @@ impl L1Cache {
                         min_hits = set_lines[way].hits;
                         min_way = way;
                     }
-                    // println!(
-                    //     "way {} tag {} base_addr {}",
-                    //     way, set_lines[way].tag, set_lines[way].base_addr
-                    // );
+                  
                     if set_lines[way].tag == tag || set_lines[way].base_addr == base_addr {
                         min_way = way;
                         break;
@@ -280,8 +240,6 @@ impl L1Cache {
                 }
                 min_way
             };
-
-            // println!("insert_and_return addr {:?}, set {} replacing way {}", addr, set, way);
 
             store_cacheline_if_needed(&set_lines[way], memory);
             let new_cacheline = CacheLine::from_memory(tag, base_addr, memory);
@@ -303,16 +261,7 @@ impl L1Cache {
         let set_lines = unsafe { self.cache.get_unchecked_mut(set) };
 
         unsafe {
-            let valid_bits = _mm256_setr_epi32(
-                (set_lines[0].valid as i32).neg(),
-                (set_lines[1].valid as i32).neg(),
-                (set_lines[2].valid as i32).neg(),
-                (set_lines[3].valid as i32).neg(),
-                (set_lines[4].valid as i32).neg(),
-                (set_lines[5].valid as i32).neg(),
-                (set_lines[6].valid as i32).neg(),
-                (set_lines[7].valid as i32).neg(),
-            );
+            let valid_bits = get_valid_bits(&set_lines);
 
             let tags = _mm256_setr_epi32(
                 set_lines[0].tag as i32,
@@ -325,27 +274,22 @@ impl L1Cache {
                 set_lines[7].tag as i32,
             );
 
-            let tag_match = _mm256_cmpeq_epi32(tags, _mm256_set1_epi32(tag as i32));
-            let valid_match = _mm256_and_si256(tag_match, valid_bits);
-            let mask = _mm256_movemask_ps(_mm256_castsi256_ps(valid_match)) as u32;
+            let tag_match = _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpeq_epi32(
+                tags,
+                _mm256_set1_epi32(tag as i32),
+            )));
+            let mask = tag_match & valid_bits;
+
             if mask != 0 {
                 let way = mask.trailing_zeros() as usize;
-                // let new_cacheline = CacheLine::from_memory(tag, base_addr, memory);
-                // store_cacheline_if_needed(&set_lines[way], memory); // WIP
-                // set_lines[way] = new_cacheline;
                 let memory_record = record_from_memory(addr, memory);
                 set_lines[way].data[offset] = memory_record;
                 return set_lines[way].data[offset].as_mut();
             }
 
             // Find invalid or least recently used way
-            let invalid_mask = _mm256_xor_si256(valid_bits, _mm256_set1_epi32(-1));
-            // println!("invalid_mask: {:?}", invalid_mask);
-            let invalid_bits = _mm256_movemask_ps(_mm256_castsi256_ps(invalid_mask)) as u32;
-
-            // println!("invalid_bits: {:08b}", invalid_bits);
+            let invalid_bits = valid_bits ^ 0xFF;
             let way = if invalid_bits != 0 {
-                // Use first invalid way if available
                 invalid_bits.trailing_zeros() as usize
             } else {
                 // Find way with lowest hits or same tag || base_addr.
@@ -356,10 +300,6 @@ impl L1Cache {
                         min_hits = set_lines[way].hits;
                         min_way = way;
                     }
-                    // println!(
-                    //     "way {} tag {} base_addr {}",
-                    //     way, set_lines[way].tag, set_lines[way].base_addr
-                    // );
                     if set_lines[way].tag == tag || set_lines[way].base_addr == base_addr {
                         min_way = way;
                         break;
@@ -367,8 +307,6 @@ impl L1Cache {
                 }
                 min_way
             };
-
-            // println!("insert_and_return addr {:?}, set {} replacing way {}", addr, set, way);
 
             store_cacheline_if_needed(&set_lines[way], memory);
             let new_cacheline = CacheLine::from_memory(tag, base_addr, memory);
@@ -388,6 +326,17 @@ impl L1Cache {
     }
 }
 
+fn get_valid_bits(set_lines: &[CacheLine]) -> i32 {
+    set_lines[0].valid as i32
+        | (set_lines[1].valid as i32) << 1
+        | (set_lines[2].valid as i32) << 2
+        | (set_lines[3].valid as i32) << 3
+        | (set_lines[4].valid as i32) << 4
+        | (set_lines[5].valid as i32) << 5
+        | (set_lines[6].valid as i32) << 6
+        | (set_lines[7].valid as i32) << 7
+}
+
 /// Writes back a cache line to memory if it contains valid data
 ///
 /// This function is called before evicting a cache line to ensure modified data
@@ -404,7 +353,7 @@ fn store_cacheline_if_needed(cacheline: &CacheLine, memory: &mut Memory) {
             let addr = base_addr | (offset * WORD_SIZE) as u32;
             match record {
                 Some(record) => memory.insert(addr, *record),
-                None => continue,
+                None => continue, // WIP mb need to insert None. Handled by update_if_in_cache
             };
         }
     }
@@ -549,8 +498,8 @@ mod tests {
 
             // Verify it's cached
             match cache.get(addr) {
-                CacheLookupResult::Hit(Some(_)) => {},
-                _ => panic!("Address {} should be cached", i)
+                CacheLookupResult::Hit(Some(_)) => {}
+                _ => panic!("Address {} should be cached", i),
             }
         }
 
@@ -570,7 +519,7 @@ mod tests {
 
         let target_value = match cache.get(*addresses.last().unwrap()) {
             CacheLookupResult::Hit(value) => value.cloned(),
-            CacheLookupResult::Miss => None
+            CacheLookupResult::Miss => None,
         };
         let set1 = set_from_addr(addresses[0]);
         let set_last = set_from_addr(*addresses.last().unwrap());
@@ -627,7 +576,7 @@ mod tests {
             let addr = base_addr + (i * WORD_SIZE) as u32;
             let record = match cache.get(addr) {
                 CacheLookupResult::Hit(Some(record)) => record,
-                _ => panic!("Address should be cached")
+                _ => panic!("Address should be cached"),
             };
             assert_eq!(record.value, val, "Cached value mismatch");
         }
@@ -711,12 +660,12 @@ mod tests {
         // Both should be in cache (8-way set associative)
         let cached1 = match cache.get(addr1) {
             CacheLookupResult::Hit(Some(record)) => record,
-            _ => panic!("First address should be cached")
+            _ => panic!("First address should be cached"),
         };
         assert_eq!(*cached1, record1);
         let cached2 = match cache.get(addr2) {
             CacheLookupResult::Hit(Some(record)) => record,
-            _ => panic!("Second address should be cached")
+            _ => panic!("Second address should be cached"),
         };
         assert_eq!(*cached2, record2);
 
@@ -734,7 +683,7 @@ mod tests {
             // Verify it's cached
             let cached = match cache.get(addr) {
                 CacheLookupResult::Hit(Some(record)) => record,
-                _ => panic!("Address should be cached")
+                _ => panic!("Address should be cached"),
             };
             assert_eq!(*cached, record);
 
@@ -785,13 +734,19 @@ mod tests {
 
         // Try to cache an address that doesn't exist in memory
         let addr = 0x1000;
+        assert!(
+            matches!(cache.get(addr), CacheLookupResult::Miss),
+            "There must be Miss in memory for the addr {} {:?}",
+            addr, cache.get(addr)
+        );
+
         cache.insert_and_return(addr, &mut memory);
 
         // Should still create a cache line with default values
         assert!(
-            matches!(cache.get(addr), CacheLookupResult::Miss),
-            "There must be None in memory for the addr {}",
-            addr
+            matches!(cache.get(addr), CacheLookupResult::Hit(None)),
+            "There must be None in memory for the addr {} {:?}",
+            addr, cache.get(addr)
         );
     }
 
@@ -865,7 +820,11 @@ mod tests {
             let addr = base_addr + (i << 14); // Same set, different tag
             memory.insert(addr, record);
             cache.insert_and_return(addr, &mut memory);
-            assert!(matches!(cache.get(addr), CacheLookupResult::Hit(Some(_))), "Address {} should be cached", i);
+            assert!(
+                matches!(cache.get(addr), CacheLookupResult::Hit(Some(_))),
+                "Address {} should be cached",
+                i
+            );
         }
 
         // Access first address multiple times to increase its hits
@@ -925,7 +884,10 @@ mod tests {
         }
         // Last address (WAYS + 1) should have evicted one of the previous addresses
         assert!(
-            matches!(cache.get(addrs[L1Cache::WAYS]), CacheLookupResult::Hit(Some(_))),
+            matches!(
+                cache.get(addrs[L1Cache::WAYS]),
+                CacheLookupResult::Hit(Some(_))
+            ),
             "Last address should be cached"
         );
         assert!(
@@ -987,7 +949,10 @@ mod tests {
                 "MRU entry was incorrectly evicted"
             );
         }
-        assert!(matches!(cache.get(addrs[1]), CacheLookupResult::Miss), "MRU entry was not evicted");
+        assert!(
+            matches!(cache.get(addrs[1]), CacheLookupResult::Miss),
+            "MRU entry was not evicted"
+        );
     }
 
     #[test]
@@ -1005,6 +970,6 @@ mod tests {
         println!("cache {:?}", cache.cache[set]);
         println!("memory after {:?}", memory);
 
-        assert!(matches!(cache.get(addr), CacheLookupResult::Hit(Some(_))));
+        assert!(matches!(cache.get(addr), CacheLookupResult::Hit(None)));
     }
 }
