@@ -151,20 +151,21 @@ pub fn dashu_modpow(
     exponent: &dashu::integer::UBig,
     modulus: &dashu::integer::UBig,
 ) -> dashu::integer::UBig {
-    if modulus == &dashu::integer::UBig::from(1u32) {
-        return dashu::integer::UBig::from(0u32);
+    if modulus == &dashu::integer::UBig::ONE {
+        return dashu::integer::UBig::ZERO;
     }
 
-    let mut result = dashu::integer::UBig::from(1u32);
+    let mut result = dashu::integer::UBig::ONE;
+    let two = dashu::integer::UBig::ONE + dashu::integer::UBig::ONE;
     let mut base = base.clone() % modulus;
     let mut exp = exponent.clone();
 
-    while exp > dashu::integer::UBig::from(0u32) {
-        if &exp % dashu::integer::UBig::from(2u32) == dashu::integer::UBig::from(1u32) {
+    while !exp.is_zero() {
+        if &exp % &two == dashu::integer::UBig::ONE {
             result = (result * &base) % modulus;
         }
         exp >>= 1;
-        base = (&base * &base) % modulus;
+        base = base.sqr() % modulus;
     }
 
     result

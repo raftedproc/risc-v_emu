@@ -66,7 +66,7 @@ impl ExecutionState {
             current_shard: 1,
             clk: 0,
             pc: pc_start,
-            memory: HashMap::new(),
+            memory: HashMap::with_capacity(2398076),
             uninitialized_memory: HashMap::new(),
             input_stream: Vec::new(),
             input_stream_ptr: 0,
