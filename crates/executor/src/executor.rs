@@ -261,18 +261,18 @@ impl<'a> Executor<'a> {
         #[allow(clippy::single_match_else)]
         let record = self.state.memory.get(&addr);
 
-        if self.executor_mode == ExecutorMode::Checkpoint || self.unconstrained {
-            match record {
-                Some(record) => {
-                    self.memory_checkpoint
-                        .entry(addr)
-                        .or_insert_with(|| Some(*record));
-                }
-                None => {
-                    self.memory_checkpoint.entry(addr).or_insert(None);
-                }
-            }
-        }
+        // if self.executor_mode == ExecutorMode::Checkpoint || self.unconstrained {
+        //     match record {
+        //         Some(record) => {
+        //             self.memory_checkpoint
+        //                 .entry(addr)
+        //                 .or_insert_with(|| Some(*record));
+        //         }
+        //         None => {
+        //             self.memory_checkpoint.entry(addr).or_insert(None);
+        //         }
+        //     }
+        // }
 
         match record {
             Some(record) => record.value,
@@ -398,19 +398,19 @@ impl<'a> Executor<'a> {
     ) -> MemoryWriteRecord {
         // Get the memory record entry.
         let entry = self.state.memory.entry(addr);
-        if self.executor_mode == ExecutorMode::Checkpoint || self.unconstrained {
-            match entry {
-                Entry::Occupied(ref entry) => {
-                    let record = entry.get();
-                    self.memory_checkpoint
-                        .entry(addr)
-                        .or_insert_with(|| Some(*record));
-                }
-                Entry::Vacant(_) => {
-                    self.memory_checkpoint.entry(addr).or_insert(None);
-                }
-            }
-        }
+        // if self.executor_mode == ExecutorMode::Checkpoint || self.unconstrained {
+        //     match entry {
+        //         Entry::Occupied(ref entry) => {
+        //             let record = entry.get();
+        //             self.memory_checkpoint
+        //                 .entry(addr)
+        //                 .or_insert_with(|| Some(*record));
+        //         }
+        //         Entry::Vacant(_) => {
+        //             self.memory_checkpoint.entry(addr).or_insert(None);
+        //         }
+        //     }
+        // }
 
         // If we're in unconstrained mode, we don't want to modify state, so we'll save the
         // original state if it's the first time modifying it.

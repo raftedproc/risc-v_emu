@@ -30,7 +30,7 @@ debug-assertions = true
 [workspace.dependencies]
 # sp1
 sp1-core-executor = { path = "crates/executor", version = "3.0.0" }
-sp1-curves = { path = "crates/curves", version = "3.0.0" }
+sp1-curves = { path = "crates/curves", version = "3.0.0", features = ["bigint-rug"]}
 sp1-primitives = { path = "crates/primitives", version = "3.0.0" }
 
 # p3
