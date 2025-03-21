@@ -523,6 +523,7 @@ impl<'a> Executor<'a> {
     }
 
     /// Fetch the destination register and input operand values for an ALU instruction.
+    #[inline]
     fn alu_rr(&mut self, instruction: &Instruction) -> (Register, u32, u32) {
         if !instruction.imm_c {
             let (rd, rs1, rs2) = instruction.r_type();
@@ -598,69 +599,56 @@ impl<'a> Executor<'a> {
         let (a, b, c): (u32, u32, u32);
         let (addr, memory_read_value): (u32, u32);
 
-        match instruction.opcode {
-            // Arithmetic instructions.
-            Opcode::ADD => {
-                let lookup_id = create_alu_lookup_id(rng);
-                (rd, b, c) = self.alu_rr(instruction);
-                a = b.wrapping_add(c);
-                self.alu_rw(instruction, rd, a, b, c, lookup_id);
+        // Arithmetic instructions.
+        if instruction.opcode <= Opcode::SLTU {
+            let lookup_id = create_alu_lookup_id(rng);
+            (rd, b, c) = self.alu_rr(instruction);
+            let a;
+            match instruction.opcode {
+                Opcode::ADD => {
+                    a = b.wrapping_add(c);
+                }
+                Opcode::SUB => {
+                    a = b.wrapping_sub(c);
+                }
+                Opcode::XOR => {
+                    a = b ^ c;
+                }
+                Opcode::OR => {
+                    a = b | c;
+                }
+                Opcode::AND => {
+                    a = b & c;
+                }
+                Opcode::SLL => {
+                    a = b.wrapping_shl(c);
+                }
+                Opcode::SRL => {
+                    a = b.wrapping_shr(c);
+                }
+                Opcode::SRA => {
+                    a = (b as i32).wrapping_shr(c) as u32;
+                }
+                Opcode::SLT => {
+                    a = if (b as i32) < (c as i32) { 1 } else { 0 };
+                }
+                Opcode::SLTU => {
+                    a = if b < c { 1 } else { 0 };
+                }
+                _ => { a = 0;}
             }
-            Opcode::SUB => {
-                let lookup_id = create_alu_lookup_id(rng);
-                (rd, b, c) = self.alu_rr(instruction);
-                a = b.wrapping_sub(c);
-                self.alu_rw(instruction, rd, a, b, c, lookup_id);
-            }
-            Opcode::XOR => {
-                let lookup_id = create_alu_lookup_id(rng);
-                (rd, b, c) = self.alu_rr(instruction);
-                a = b ^ c;
-                self.alu_rw(instruction, rd, a, b, c, lookup_id);
-            }
-            Opcode::OR => {
-                let lookup_id = create_alu_lookup_id(rng);
-                (rd, b, c) = self.alu_rr(instruction);
-                a = b | c;
-                self.alu_rw(instruction, rd, a, b, c, lookup_id);
-            }
-            Opcode::AND => {
-                let lookup_id = create_alu_lookup_id(rng);
-                (rd, b, c) = self.alu_rr(instruction);
-                a = b & c;
-                self.alu_rw(instruction, rd, a, b, c, lookup_id);
-            }
-            Opcode::SLL => {
-                let lookup_id = create_alu_lookup_id(rng);
-                (rd, b, c) = self.alu_rr(instruction);
-                a = b.wrapping_shl(c);
-                self.alu_rw(instruction, rd, a, b, c, lookup_id);
-            }
-            Opcode::SRL => {
-                let lookup_id = create_alu_lookup_id(rng);
-                (rd, b, c) = self.alu_rr(instruction);
-                a = b.wrapping_shr(c);
-                self.alu_rw(instruction, rd, a, b, c, lookup_id);
-            }
-            Opcode::SRA => {
-                let lookup_id = create_alu_lookup_id(rng);
-                (rd, b, c) = self.alu_rr(instruction);
-                a = (b as i32).wrapping_shr(c) as u32;
-                self.alu_rw(instruction, rd, a, b, c, lookup_id);
-            }
-            Opcode::SLT => {
-                let lookup_id = create_alu_lookup_id(rng);
-                (rd, b, c) = self.alu_rr(instruction);
-                a = if (b as i32) < (c as i32) { 1 } else { 0 };
-                self.alu_rw(instruction, rd, a, b, c, lookup_id);
-            }
-            Opcode::SLTU => {
-                let lookup_id = create_alu_lookup_id(rng);
-                (rd, b, c) = self.alu_rr(instruction);
-                a = if b < c { 1 } else { 0 };
-                self.alu_rw(instruction, rd, a, b, c, lookup_id);
-            }
+            self.alu_rw(instruction, rd, a, b, c, lookup_id);
 
+            // Update the program counter.
+            self.state.pc = next_pc;
+
+            // Update the clk to the next cycle.
+            self.state.clk += 4;
+
+            return Ok(())
+        }
+
+        match instruction.opcode {
             // Load instructions.
             Opcode::LB => {
                 (rd, _, _, addr, memory_read_value) = self.load_rr(instruction);
@@ -951,6 +939,7 @@ impl<'a> Executor<'a> {
             Opcode::UNIMP => {
                 return Err(ExecutionError::Unimplemented());
             }
+            _ => { },
         }
 
         // Update the program counter.
