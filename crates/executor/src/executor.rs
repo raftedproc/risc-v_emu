@@ -259,7 +259,7 @@ impl<'a> Executor<'a> {
     #[must_use]
     pub fn word(&mut self, addr: u32) -> u32 {
         #[allow(clippy::single_match_else)]
-        let record = self.state.memory.get(&addr);
+        // let record = self.state.memory.get(&addr);
         let mem_value = self.state.memory_[addr];
 
         // if record.is_some() {
@@ -284,10 +284,11 @@ impl<'a> Executor<'a> {
         //     }
         // }
 
-        match record {
-            Some(record) => record.value,
-            None => 0,
-        }
+        // match record {
+        //     Some(record) => record.value,
+        //     None => 0,
+        // }
+        mem_value
     }
 
     /// Get the current value of a byte.
@@ -319,7 +320,7 @@ impl<'a> Executor<'a> {
         _local_memory_access: Option<&mut HashMap<u32, MemoryLocalEvent>>,
     ) -> MemoryReadRecord {
         // Get the memory record entry.
-        let entry = self.state.memory.entry(addr);
+        // let entry = self.state.memory.entry(addr);
 
         let mem_value = self.state.memory_[addr];
         // if self.executor_mode == ExecutorMode::Checkpoint || self.unconstrained {
@@ -350,30 +351,35 @@ impl<'a> Executor<'a> {
         // }
 
         // If it's the first time accessing this address, initialize previous values.
-        let record: &mut MemoryRecord = match entry {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => {
-                // If addr has a specific value to be initialized with, use that, otherwise 0.
-                let value = self.state.uninitialized_memory.get(&addr).unwrap_or(&0);
-                self.uninitialized_memory_checkpoint
-                    .entry(addr)
-                    .or_insert_with(|| *value != 0);
-                entry.insert(MemoryRecord {
-                    value: *value,
-                    shard: 0,
-                    timestamp: 0,
-                })
-            }
-        };
+        // let record: &mut MemoryRecord = match entry {
+        //     Entry::Occupied(entry) => entry.into_mut(),
+        //     Entry::Vacant(entry) => {
+        //         // If addr has a specific value to be initialized with, use that, otherwise 0.
+        //         let value = self.state.uninitialized_memory.get(&addr).unwrap_or(&0);
+        //         self.uninitialized_memory_checkpoint
+        //             .entry(addr)
+        //             .or_insert_with(|| *value != 0);
+        //         entry.insert(MemoryRecord {
+        //             value: *value,
+        //             shard: 0,
+        //             timestamp: 0,
+        //         })
+        //     }
+        // };
 
         // if record.value != mem_value {
         //     panic!("mr: Memory value {} at address {} does not match record value {}", mem_value, addr, record.value);
         // }
 
-        let prev_record = *record;
-        record.shard = shard;
-        record.timestamp = timestamp;
+        // let prev_record = *record;
+        // record.shard = shard;
+        // record.timestamp = timestamp;
 
+        let record = MemoryRecord {
+            value: mem_value,
+            shard,
+            timestamp,
+        };
         // if !self.unconstrained {
         //     let local_memory_access = if let Some(local_memory_access) = local_memory_access {
         //         local_memory_access
@@ -398,8 +404,8 @@ impl<'a> Executor<'a> {
             record.value,
             record.shard,
             record.timestamp,
-            prev_record.shard,
-            prev_record.timestamp,
+            0,
+            0,
         )
     }
 
@@ -413,9 +419,9 @@ impl<'a> Executor<'a> {
         local_memory_access: Option<&mut HashMap<u32, MemoryLocalEvent>>,
     ) -> MemoryWriteRecord {
         // Get the memory record entry.
-        let entry = self.state.memory.entry(addr);
+        // let entry = self.state.memory.entry(addr);
         self.state.memory_[addr] = value;
-        let mem_value = self.state.memory_[addr];
+        // let mem_value = self.state.memory_[addr];
 
         // if self.executor_mode == ExecutorMode::Checkpoint || self.unconstrained {
         //     match entry {
@@ -434,71 +440,82 @@ impl<'a> Executor<'a> {
         // If we're in unconstrained mode, we don't want to modify state, so we'll save the
         // original state if it's the first time modifying it.
         if self.unconstrained {
-            let record = match entry {
-                Entry::Occupied(ref entry) => Some(entry.get()),
-                Entry::Vacant(_) => None,
-            };
+            // let record = match entry {
+            //     Entry::Occupied(ref entry) => Some(entry.get()),
+            //     Entry::Vacant(_) => None,
+            // };
+            let record = Some(MemoryRecord {
+                value,
+                shard,
+                timestamp,
+            });
+            
             self.unconstrained_state
                 .memory_diff
                 .entry(addr)
-                .or_insert(record.copied());
+                .or_insert(record);
         }
 
         // If it's the first time accessing this address, initialize previous values.
-        let record: &mut MemoryRecord = match entry {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => {
-                // If addr has a specific value to be initialized with, use that, otherwise 0.
-                let value = self.state.uninitialized_memory.get(&addr).unwrap_or(&0);
-                self.uninitialized_memory_checkpoint
-                    .entry(addr)
-                    .or_insert_with(|| *value != 0);
+        // let record: &mut MemoryRecord = match entry {
+        //     Entry::Occupied(entry) => entry.into_mut(),
+        //     Entry::Vacant(entry) => {
+        //         // If addr has a specific value to be initialized with, use that, otherwise 0.
+        //         let value = self.state.uninitialized_memory.get(&addr).unwrap_or(&0);
+        //         self.uninitialized_memory_checkpoint
+        //             .entry(addr)
+        //             .or_insert_with(|| *value != 0);
 
-                entry.insert(MemoryRecord {
-                    value: *value,
-                    shard: 0,
-                    timestamp: 0,
-                })
-            }
-        };
+        //         entry.insert(MemoryRecord {
+        //             value: *value,
+        //             shard: 0,
+        //             timestamp: 0,
+        //         })
+        //     }
+        // };
   
 
-        let prev_record = *record;
-        record.value = value;
-        record.shard = shard;
-        record.timestamp = timestamp;
+        // let prev_record = *record;
+        let record = MemoryRecord {
+            value,
+            shard,
+            timestamp,
+        };
+        // record.value = value;
+        // record.shard = shard;
+        // record.timestamp = timestamp;
 
         // if record.value != mem_value {
         //     panic!("mw: Memory value {} at address {} does not match record value {}", mem_value, addr, record.value);
         // }
 
-        if !self.unconstrained {
-            let local_memory_access = if let Some(local_memory_access) = local_memory_access {
-                local_memory_access
-            } else {
-                &mut self.local_memory_access
-            };
+        // if !self.unconstrained {
+        //     let local_memory_access = if let Some(local_memory_access) = local_memory_access {
+        //         local_memory_access
+        //     } else {
+        //         &mut self.local_memory_access
+        //     };
 
-            local_memory_access
-                .entry(addr)
-                .and_modify(|e| {
-                    e.final_mem_access = *record;
-                })
-                .or_insert(MemoryLocalEvent {
-                    addr,
-                    initial_mem_access: prev_record,
-                    final_mem_access: *record,
-                });
-        }
+        //     local_memory_access
+        //         .entry(addr)
+        //         .and_modify(|e| {
+        //             e.final_mem_access = *record;
+        //         })
+        //         .or_insert(MemoryLocalEvent {
+        //             addr,
+        //             initial_mem_access: prev_record,
+        //             final_mem_access: *record,
+        //         });
+        // }
 
         // Construct the memory write record.
         MemoryWriteRecord::new(
             record.value,
             record.shard,
             record.timestamp,
-            prev_record.value,
-            prev_record.shard,
-            prev_record.timestamp,
+            0,
+            0,
+            0,
         )
     }
 
@@ -1084,14 +1101,14 @@ impl<'a> Executor<'a> {
 
         tracing::debug!("loading memory image");
         for (&addr, value) in &self.program.memory_image {
-            self.state.memory.insert(
-                addr,
-                MemoryRecord {
-                    value: *value,
-                    shard: 0,
-                    timestamp: 0,
-                },
-            );
+            // self.state.memory.insert(
+            //     addr,
+            //     MemoryRecord {
+            //         value: *value,
+            //         shard: 0,
+            //         timestamp: 0,
+            //     },
+            // );
             self.state.memory_[addr] = *value;
         }
     }

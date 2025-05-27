@@ -62,6 +62,7 @@ pub struct ExecutionState {
     /// + timestamp that each memory address was accessed.
     pub memory: HashMap<u32, MemoryRecord>,
 
+    /// Memory repr using anon mmap.
     #[serde(skip)]
     pub memory_: Memory,
 
