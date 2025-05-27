@@ -40,9 +40,11 @@ impl Syscall for ExitUnconstrainedSyscall {
                 match value {
                     Some(value) => {
                         ctx.rt.state.memory.insert(addr, value);
+                        ctx.rt.state.memory_[addr] = value.value;
                     }
                     None => {
                         ctx.rt.state.memory.remove(&addr);
+                        ctx.rt.state.memory_[addr] = 0;
                     }
                 }
             }

@@ -1,12 +1,52 @@
 use std::{
     fs::File,
-    io::{Seek, Write},
+    io::{Seek, Write}, ops::{Index, IndexMut},
 };
+
+use memmap2::{MmapMut};
 
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{events::MemoryRecord, syscalls::SyscallCode, ExecutorMode, Register};
+
+
+/// Holds anon mmap memory allocation.
+#[derive(Debug)]
+pub struct Memory {
+    pub memory: MmapMut,
+}
+
+// 2 << 30 : 4GB / 4
+impl Default for Memory {
+    fn default() -> Self {
+        Memory { memory: MmapMut::map_anon(1 << 30).unwrap() }
+    }
+}
+
+impl Clone for Memory {
+    fn clone(&self) -> Self {
+        Self { memory: MmapMut::map_anon(1 << 30).unwrap() }
+    }
+}
+
+impl IndexMut<u32> for Memory {
+    fn index_mut(&mut self, index: u32) -> &mut Self::Output {
+        let bytes = &mut self.memory[index as usize..index as usize + 4];
+        // Safety: We know the slice is 4 bytes long and properly aligned since index is 4-byte aligned
+        unsafe { &mut *(bytes.as_mut_ptr() as *mut u32) }
+    }
+}
+
+impl Index<u32> for Memory {
+    type Output = u32;
+
+    fn index(&self, index: u32) -> &Self::Output {
+        let bytes = &self.memory[index as usize..index as usize + 4];
+        // Safety: We know the slice is 4 bytes long and properly aligned since index is 4-byte aligned
+        unsafe { &*(bytes.as_ptr() as *const u32) }
+    }
+}
 
 /// Holds data describing the current state of a program's execution.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -21,6 +61,25 @@ pub struct ExecutionState {
     /// The memory which instructions operate over. Values contain the memory value and last shard
     /// + timestamp that each memory address was accessed.
     pub memory: HashMap<u32, MemoryRecord>,
+
+    #[serde(skip)]
+    pub memory_: Memory,
+
+    /// (cnt, length)
+    #[serde(skip)]
+    pub pot_tb: HashMap<u32, (u32, u32)>,
+
+    /// is_jmp
+    #[serde(skip)]
+    pub is_jmp: bool,
+
+    /// prev_pc
+    #[serde(skip)]
+    pub prev_pc: u32,
+
+    /// tb_len
+    #[serde(skip)]
+    pub tb_len: u32,
 
     /// Registers file which instructions operate over.
     pub register_file: [MemoryRecord; Register::number_of_registers()],
@@ -75,6 +134,11 @@ impl ExecutionState {
             proof_stream_ptr: 0,
             syscall_counts: HashMap::new(),
             register_file: [MemoryRecord::default(); Register::number_of_registers()],
+            memory_: Memory::default(),
+            pot_tb: HashMap::new(),
+            is_jmp: false,
+            prev_pc: 0,
+            tb_len: 0,
         }
     }
 }

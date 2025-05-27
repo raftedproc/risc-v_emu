@@ -67,6 +67,7 @@ impl Syscall for HintReadSyscall {
                 .entry(ptr + i)
                 .and_modify(|_| panic!("hint read address is initialized already"))
                 .or_insert(word);
+            ctx.rt.state.memory_[ptr + i] = word;
         }
         None
     }

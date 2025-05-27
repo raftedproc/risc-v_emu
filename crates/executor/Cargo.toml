@@ -42,6 +42,7 @@ tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 vec_map = { version = "0.8.2", features = ["serde"] }
 enum-map = { version = "2.7.3", features = ["serde"] }
 frand = "0.10.1"
+memmap2 = "0.9.5"
 
 [dev-dependencies]
 alloy-primitives = "0.8.5"

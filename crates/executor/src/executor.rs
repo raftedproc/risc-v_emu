@@ -260,7 +260,17 @@ impl<'a> Executor<'a> {
     pub fn word(&mut self, addr: u32) -> u32 {
         #[allow(clippy::single_match_else)]
         let record = self.state.memory.get(&addr);
+        let mem_value = self.state.memory_[addr];
 
+        // if record.is_some() {
+        //     if record.unwrap().value != mem_value {
+        //         panic!("word: Memory value {} at address {} does not match record value {}", mem_value, addr, record.unwrap().value);
+        //     }
+        // } else {
+        //     if mem_value != 0 {
+        //         panic!("word: Memory value {} at address {} does not match record value 0", mem_value, addr);
+        //     }
+        // }
         // if self.executor_mode == ExecutorMode::Checkpoint || self.unconstrained {
         //     match record {
         //         Some(record) => {
@@ -306,10 +316,12 @@ impl<'a> Executor<'a> {
         addr: u32,
         shard: u32,
         timestamp: u32,
-        local_memory_access: Option<&mut HashMap<u32, MemoryLocalEvent>>,
+        _local_memory_access: Option<&mut HashMap<u32, MemoryLocalEvent>>,
     ) -> MemoryReadRecord {
         // Get the memory record entry.
         let entry = self.state.memory.entry(addr);
+
+        let mem_value = self.state.memory_[addr];
         // if self.executor_mode == ExecutorMode::Checkpoint || self.unconstrained {
         //     match entry {
         //         Entry::Occupied(ref entry) => {
@@ -353,6 +365,10 @@ impl<'a> Executor<'a> {
                 })
             }
         };
+
+        // if record.value != mem_value {
+        //     panic!("mr: Memory value {} at address {} does not match record value {}", mem_value, addr, record.value);
+        // }
 
         let prev_record = *record;
         record.shard = shard;
@@ -398,6 +414,9 @@ impl<'a> Executor<'a> {
     ) -> MemoryWriteRecord {
         // Get the memory record entry.
         let entry = self.state.memory.entry(addr);
+        self.state.memory_[addr] = value;
+        let mem_value = self.state.memory_[addr];
+
         // if self.executor_mode == ExecutorMode::Checkpoint || self.unconstrained {
         //     match entry {
         //         Entry::Occupied(ref entry) => {
@@ -442,11 +461,16 @@ impl<'a> Executor<'a> {
                 })
             }
         };
+  
 
         let prev_record = *record;
         record.value = value;
         record.shard = shard;
         record.timestamp = timestamp;
+
+        // if record.value != mem_value {
+        //     panic!("mw: Memory value {} at address {} does not match record value {}", mem_value, addr, record.value);
+        // }
 
         if !self.unconstrained {
             let local_memory_access = if let Some(local_memory_access) = local_memory_access {
@@ -586,6 +610,13 @@ impl<'a> Executor<'a> {
         self.program.instructions[idx]
     }
 
+    /// stats counter
+    #[inline]
+    fn mark_jmp(&mut self) {
+        self.state.is_jmp = true;
+        self.state.prev_pc = self.state.pc;
+    }
+
     /// Execute the given instruction over the current state of the runtime.
     #[allow(clippy::too_many_lines)]
     fn execute_instruction(
@@ -635,7 +666,9 @@ impl<'a> Executor<'a> {
                 Opcode::SLTU => {
                     a = if b < c { 1 } else { 0 };
                 }
-                _ => { a = 0;}
+                _ => {
+                    a = 0;
+                }
             }
             self.alu_rw(instruction, rd, a, b, c, lookup_id);
 
@@ -645,7 +678,7 @@ impl<'a> Executor<'a> {
             // Update the clk to the next cycle.
             self.state.clk += 4;
 
-            return Ok(())
+            return Ok(());
         }
 
         match instruction.opcode {
@@ -736,36 +769,42 @@ impl<'a> Executor<'a> {
                 if a == b {
                     next_pc = self.state.pc.wrapping_add(c);
                 }
+                //self.mark_jmp();
             }
             Opcode::BNE => {
                 (a, b, c) = self.branch_rr(instruction);
                 if a != b {
                     next_pc = self.state.pc.wrapping_add(c);
                 }
+                //self.mark_jmp();
             }
             Opcode::BLT => {
                 (a, b, c) = self.branch_rr(instruction);
                 if (a as i32) < (b as i32) {
                     next_pc = self.state.pc.wrapping_add(c);
                 }
+                //self.mark_jmp();
             }
             Opcode::BGE => {
                 (a, b, c) = self.branch_rr(instruction);
                 if (a as i32) >= (b as i32) {
                     next_pc = self.state.pc.wrapping_add(c);
                 }
+                //self.mark_jmp();
             }
             Opcode::BLTU => {
                 (a, b, c) = self.branch_rr(instruction);
                 if a < b {
                     next_pc = self.state.pc.wrapping_add(c);
                 }
+                //self.mark_jmp();
             }
             Opcode::BGEU => {
                 (a, b, c) = self.branch_rr(instruction);
                 if a >= b {
                     next_pc = self.state.pc.wrapping_add(c);
                 }
+                //self.mark_jmp();
             }
 
             // Jump instructions.
@@ -774,6 +813,7 @@ impl<'a> Executor<'a> {
                 a = self.state.pc + 4;
                 self.rw(rd, a);
                 next_pc = self.state.pc.wrapping_add(imm);
+                //self.mark_jmp();
             }
             Opcode::JALR => {
                 let (rd, rs1, imm) = instruction.i_type();
@@ -781,6 +821,7 @@ impl<'a> Executor<'a> {
                 a = self.state.pc + 4;
                 self.rw(rd, a);
                 next_pc = b.wrapping_add(c);
+                //self.mark_jmp();
             }
 
             // Upper immediate instructions.
@@ -793,6 +834,7 @@ impl<'a> Executor<'a> {
 
             // System instructions.
             Opcode::ECALL => {
+                //self.mark_jmp();
                 // We peek at register x5 to get the syscall id. The reason we don't `self.rr` this
                 // register is that we write to it later.
                 let t0 = Register::X5;
@@ -939,7 +981,7 @@ impl<'a> Executor<'a> {
             Opcode::UNIMP => {
                 return Err(ExecutionError::Unimplemented());
             }
-            _ => { },
+            _ => {}
         }
 
         // Update the program counter.
@@ -1050,6 +1092,7 @@ impl<'a> Executor<'a> {
                     timestamp: 0,
                 },
             );
+            self.state.memory_[addr] = *value;
         }
     }
 
@@ -1088,19 +1131,51 @@ impl<'a> Executor<'a> {
         let mut rng = Rand::new();
         let done_inv = (self.program.instructions.len() * 4) as u32;
 
+        // let mut instr_cnt = 0;
         // Loop until we've executed `self.shard_batch_size` shards if `self.shard_batch_size` is
         // set.
         let done;
         loop {
+            // instr_cnt += 1;
+            // self.state
+            //     .pot_tb
+            //     .entry(self.state.pc)
+            //     .and_modify(|(cnt, _)| {
+            //         *cnt += 1;
+            //     });
+
             if self.execute_cycle(done_inv, &mut rng)? {
                 done = true;
                 break;
             }
+            // if self.state.is_jmp {
+            //     self.state
+            //         .pot_tb
+            //         .entry(self.state.prev_pc - self.state.tb_len)
+            //         .or_insert((0, self.state.tb_len));
+            //     self.state.is_jmp = false;
+            //     self.state.tb_len = 0;
+            // } else {
+            //     self.state.tb_len += 1;
+            // }
         }
 
         if done {
             self.postprocess();
         }
+
+        // let mut jit_cnt = 0;
+        // let mut aggr_count = 0;
+        // for (addr, (cnt, len)) in self.state.pot_tb.iter() {
+        //     if *len > 1 && *cnt > 1 {
+        //         println!("addr: {}: len {}: cnt {}", addr, len, cnt);
+        //         jit_cnt += cnt;
+        //         aggr_count += 1;
+        //     }
+        // }
+        // println!("instr_cnt: {}", instr_cnt);
+        // println!("aggr_count: {}", aggr_count);
+        // println!("jit_cnt: {}", jit_cnt);
 
         Ok(done)
     }
