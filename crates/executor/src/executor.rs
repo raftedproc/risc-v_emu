@@ -1186,7 +1186,7 @@ impl<'a> Executor<'a> {
         // for (addr, (cnt, len)) in self.state.pot_tb.iter() {
         //     if *len > 1 && *cnt > 1 {
         //         println!("addr: {}: len {}: cnt {}", addr, len, cnt);
-        //         jit_cnt += cnt;
+        //         jit_cnt += cnt * len;
         //         aggr_count += 1;
         //     }
         // }

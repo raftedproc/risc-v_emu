@@ -14,6 +14,7 @@ use crate::{events::MemoryRecord, syscalls::SyscallCode, ExecutorMode, Register}
 /// Holds anon mmap memory allocation.
 #[derive(Debug)]
 pub struct Memory {
+    /// The anon mmap memory allocation.
     pub memory: MmapMut,
 }
 
