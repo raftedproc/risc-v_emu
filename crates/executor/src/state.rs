@@ -1,51 +1,47 @@
 use std::{
-    fs::File,
-    io::{Seek, Write}, ops::{Index, IndexMut},
+    fs::File, io::{Seek, Write}, ops::{Index, IndexMut}
 };
 
+use cranelift_jit::{JITBuilder, JITModule};
 use memmap2::{MmapMut};
 
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 
-use crate::{events::MemoryRecord, syscalls::SyscallCode, ExecutorMode, Register};
+use crate::{events::MemoryRecord, memory::{mem_load32, mem_store32}, syscalls::SyscallCode, ExecutorMode, Register, RegisterFile};
 
+use crate::memory::Memory;
 
-/// Holds anon mmap memory allocation.
-#[derive(Debug)]
-pub struct Memory {
-    /// The anon mmap memory allocation.
-    pub memory: MmapMut,
+/// State JITWrapper to store module
+pub struct JITWrapper {
+    /// Common JITModule
+    pub jit: JITModule,
 }
 
-// 2 << 30 : 4GB / 4
-impl Default for Memory {
+impl Default for JITWrapper {
     fn default() -> Self {
-        Memory { memory: MmapMut::map_anon(1 << 30).unwrap() }
+        let mut builder = JITBuilder::new(cranelift_module::default_libcall_names()).expect("failed to create JITBuilder");
+        // Create the JITModule first
+
+        builder.symbol("mem_load32",  mem_load32 as *const u8);
+        builder.symbol("mem_store32", mem_store32 as *const u8);
+    
+        let jit = JITModule::new(builder);
+        Self {
+            jit,
+        }
     }
 }
 
-impl Clone for Memory {
+impl Clone for JITWrapper {
     fn clone(&self) -> Self {
-        Self { memory: MmapMut::map_anon(1 << 30).unwrap() }
+        Self::default()
     }
 }
 
-impl IndexMut<u32> for Memory {
-    fn index_mut(&mut self, index: u32) -> &mut Self::Output {
-        let bytes = &mut self.memory[index as usize..index as usize + 4];
-        // Safety: We know the slice is 4 bytes long and properly aligned since index is 4-byte aligned
-        unsafe { &mut *(bytes.as_mut_ptr() as *mut u32) }
-    }
-}
-
-impl Index<u32> for Memory {
-    type Output = u32;
-
-    fn index(&self, index: u32) -> &Self::Output {
-        let bytes = &self.memory[index as usize..index as usize + 4];
-        // Safety: We know the slice is 4 bytes long and properly aligned since index is 4-byte aligned
-        unsafe { &*(bytes.as_ptr() as *const u32) }
+impl std::fmt::Debug for JITWrapper {
+    fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Ok(())
     }
 }
 
@@ -83,8 +79,13 @@ pub struct ExecutionState {
     #[serde(skip)]
     pub tb_len: u32,
 
+    /// JITWrapper
+    #[serde(skip)]
+    pub jit_wrapper: JITWrapper,
+
     /// Registers file which instructions operate over.
-    pub register_file: [MemoryRecord; Register::number_of_registers()],
+    // pub register_file: [MemoryRecord; Register::number_of_registers()],
+    pub register_file: RegisterFile,
 
     /// The global clock keeps track of how many instructions have been executed through all shards.
     pub global_clk: u64,
@@ -135,13 +136,24 @@ impl ExecutionState {
             public_values_stream_ptr: 0,
             proof_stream_ptr: 0,
             syscall_counts: HashMap::new(),
-            register_file: [MemoryRecord::default(); Register::number_of_registers()],
+            register_file: RegisterFile::default(),
             memory_: Memory::default(),
             pot_tb: HashMap::new(),
             is_jmp: false,
             prev_pc: 0,
             tb_len: 0,
+            jit_wrapper: JITWrapper::default(),
         }
+    }
+
+    /// Load a 32-bit value from memory.
+    pub fn load32(&self, addr: u32) -> u32 {
+        self.memory_.load32(addr)
+    }
+
+    /// Store a 32-bit value to memory.
+    pub fn store32(&mut self, addr: u32, val: u32) {
+        self.memory_.store32(addr, val)
     }
 }
 

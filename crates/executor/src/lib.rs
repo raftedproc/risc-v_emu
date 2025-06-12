@@ -32,6 +32,7 @@ mod register;
 mod state;
 pub mod syscalls;
 mod utils;
+mod memory;
 
 pub use context::*;
 pub use executor::*;

@@ -5,20 +5,16 @@ use std::{
 };
 
 use frand::Rand;
-use hashbrown::{hash_map::Entry, HashMap};
+// use hashbrown::{hash_map::Entry, HashMap};
+use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    context::SP1Context,
-    events::{
+    context::SP1Context, events::{
         create_alu_lookup_id, LookupId, MemoryAccessPosition, MemoryLocalEvent, MemoryReadRecord,
         MemoryRecord, MemoryWriteRecord,
-    },
-    hook::{HookEnv, HookRegistry},
-    state::{ExecutionState, ForkState},
-    syscalls::{default_syscall_map, Syscall, SyscallCode, SyscallContext},
-    Instruction, Opcode, Program, Register,
+    }, hook::{HookEnv, HookRegistry}, memory::Memory, state::{ExecutionState, ForkState}, syscalls::{default_syscall_map, Syscall, SyscallCode, SyscallContext}, Instruction, Opcode, Program, Register, RegisterFile
 };
 
 /// An executor for the SP1 RISC-V zkVM.
@@ -227,8 +223,9 @@ impl<'a> Executor<'a> {
     #[must_use]
     pub fn registers(&mut self) -> [u32; 32] {
         let mut registers = [0; 32];
-        for i in 0..32 {
-            registers[i] = self.state.register_file[i].value;
+        for i in 0..Register::number_of_registers() {
+            let register = Register::from_u32(i as u32);
+            registers[i] = self.state.register_file[register].value;
         }
         registers
     }
@@ -236,7 +233,7 @@ impl<'a> Executor<'a> {
     /// Get the current value of a register.
     #[must_use]
     pub fn register(&mut self, register: Register) -> u32 {
-        self.state.register_file[register as usize].value
+        self.state.register_file[register].value
     }
 
     /// Store a value into a register.
@@ -251,8 +248,7 @@ impl<'a> Executor<'a> {
             shard: self.shard(),
             timestamp: self.timestamp(&position),
         };
-        let register_idx = register as usize;
-        self.state.register_file[register_idx] = memory_record;
+        self.state.register_file[register] = memory_record;
     }
 
     /// Get the current value of a word.
@@ -416,7 +412,7 @@ impl<'a> Executor<'a> {
         value: u32,
         shard: u32,
         timestamp: u32,
-        local_memory_access: Option<&mut HashMap<u32, MemoryLocalEvent>>,
+        _local_memory_access: Option<&mut HashMap<u32, MemoryLocalEvent>>,
     ) -> MemoryWriteRecord {
         // Get the memory record entry.
         // let entry = self.state.memory.entry(addr);
@@ -628,6 +624,7 @@ impl<'a> Executor<'a> {
     }
 
     /// stats counter
+    #[allow(dead_code)]
     #[inline]
     fn mark_jmp(&mut self) {
         self.state.is_jmp = true;
@@ -1196,6 +1193,47 @@ impl<'a> Executor<'a> {
 
         Ok(done)
     }
+
+    // pub fn find_or_compile_tb(&mut self) -> *const u8 {
+    //     todo!()
+    // }
+
+    // pub fn find_tb(&mut self) -> *const u8 {
+    //     todo!()
+    // }
+
+    // pub fn execute(&mut self) -> Result<bool, ExecutionError> {
+    //     // If it's the first cycle, initialize the program.
+    //     if self.state.global_clk == 0 {
+    //         self.initialize();
+    //     }
+
+    //     let mut rng = Rand::new();
+    //     let done_inv = (self.program.instructions.len() * 4) as u32;
+
+    //     let done;
+    //     loop {
+    //         let tb = self.find_or_compile_tb();
+    //         if tb == std::ptr::null() {
+    //             if self.execute_cycle(done_inv, &mut rng)? {
+    //                 done = true;
+    //                 break;
+    //             }
+    //         } else {
+    //             unsafe {
+    //                 let executor: extern "C" fn(*mut Memory, *mut RegisterFile) -> u32 =
+    //                     std::mem::transmute(tb);
+    //                 executor(&mut self.state.memory_, &mut self.state.register_file);
+    //             }
+    //         }
+    //     }
+
+    //     if done {
+    //         self.postprocess();
+    //     }
+
+    //     Ok(done)
+    // }
 
     fn postprocess(&mut self) {
         // Flush remaining stdout/stderr

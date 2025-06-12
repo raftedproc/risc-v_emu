@@ -1,5 +1,11 @@
 //! Registers for the SP1 zkVM.
 
+use std::ops::{Index, IndexMut};
+
+use serde::{Deserialize, Serialize};
+
+use crate::events::MemoryRecord;
+
 /// A register stores a 32-bit value used by operations.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Register {
@@ -119,5 +125,26 @@ impl Register {
     #[must_use]
     pub const fn number_of_registers() -> usize {
         Self::X31 as usize + 1
+    }
+}
+
+
+#[repr(C)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RegisterFile {
+    pub registers: [MemoryRecord; Register::number_of_registers()],
+}
+
+impl Index<Register> for RegisterFile {
+    type Output = MemoryRecord;
+
+    fn index(&self, index: Register) -> &Self::Output {
+        &self.registers[index as usize]
+    }
+}
+
+impl IndexMut<Register> for RegisterFile {
+    fn index_mut(&mut self, index: Register) -> &mut Self::Output {
+        &mut self.registers[index as usize]
     }
 }
