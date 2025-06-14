@@ -14,7 +14,7 @@ use crate::{
     context::SP1Context, events::{
         create_alu_lookup_id, LookupId, MemoryAccessPosition, MemoryLocalEvent, MemoryReadRecord,
         MemoryRecord, MemoryWriteRecord,
-    }, hook::{HookEnv, HookRegistry}, memory::Memory, state::{ExecutionState, ForkState}, syscalls::{default_syscall_map, Syscall, SyscallCode, SyscallContext}, Instruction, Opcode, Program, Register, RegisterFile
+    }, hook::{HookEnv, HookRegistry}, jitwrapper::{FastTBCache, SlowTBCache}, memory::Memory, state::{ExecutionState, ForkState}, syscalls::{default_syscall_map, Syscall, SyscallCode, SyscallContext}, tb::tb_compile, Instruction, Opcode, Program, Register, RegisterFile
 };
 
 /// An executor for the SP1 RISC-V zkVM.
@@ -1136,72 +1136,6 @@ impl<'a> Executor<'a> {
 
     /// Executes up to `self.shard_batch_size` cycles of the program, returning whether the program
     /// has finished.
-    pub fn execute(&mut self) -> Result<bool, ExecutionError> {
-        // If it's the first cycle, initialize the program.
-        if self.state.global_clk == 0 {
-            self.initialize();
-        }
-
-        let mut rng = Rand::new();
-        let done_inv = (self.program.instructions.len() * 4) as u32;
-
-        // let mut instr_cnt = 0;
-        // Loop until we've executed `self.shard_batch_size` shards if `self.shard_batch_size` is
-        // set.
-        let done;
-        loop {
-            // instr_cnt += 1;
-            // self.state
-            //     .pot_tb
-            //     .entry(self.state.pc)
-            //     .and_modify(|(cnt, _)| {
-            //         *cnt += 1;
-            //     });
-
-            if self.execute_cycle(done_inv, &mut rng)? {
-                done = true;
-                break;
-            }
-            // if self.state.is_jmp {
-            //     self.state
-            //         .pot_tb
-            //         .entry(self.state.prev_pc - self.state.tb_len)
-            //         .or_insert((0, self.state.tb_len));
-            //     self.state.is_jmp = false;
-            //     self.state.tb_len = 0;
-            // } else {
-            //     self.state.tb_len += 1;
-            // }
-        }
-
-        if done {
-            self.postprocess();
-        }
-
-        // let mut jit_cnt = 0;
-        // let mut aggr_count = 0;
-        // for (addr, (cnt, len)) in self.state.pot_tb.iter() {
-        //     if *len > 1 && *cnt > 1 {
-        //         println!("addr: {}: len {}: cnt {}", addr, len, cnt);
-        //         jit_cnt += cnt * len;
-        //         aggr_count += 1;
-        //     }
-        // }
-        // println!("instr_cnt: {}", instr_cnt);
-        // println!("aggr_count: {}", aggr_count);
-        // println!("jit_cnt: {}", jit_cnt);
-
-        Ok(done)
-    }
-
-    // pub fn find_or_compile_tb(&mut self) -> *const u8 {
-    //     todo!()
-    // }
-
-    // pub fn find_tb(&mut self) -> *const u8 {
-    //     todo!()
-    // }
-
     // pub fn execute(&mut self) -> Result<bool, ExecutionError> {
     //     // If it's the first cycle, initialize the program.
     //     if self.state.global_clk == 0 {
@@ -1211,29 +1145,103 @@ impl<'a> Executor<'a> {
     //     let mut rng = Rand::new();
     //     let done_inv = (self.program.instructions.len() * 4) as u32;
 
+    //     // let mut instr_cnt = 0;
+    //     // Loop until we've executed `self.shard_batch_size` shards if `self.shard_batch_size` is
+    //     // set.
     //     let done;
     //     loop {
-    //         let tb = self.find_or_compile_tb();
-    //         if tb == std::ptr::null() {
-    //             if self.execute_cycle(done_inv, &mut rng)? {
-    //                 done = true;
-    //                 break;
-    //             }
-    //         } else {
-    //             unsafe {
-    //                 let executor: extern "C" fn(*mut Memory, *mut RegisterFile) -> u32 =
-    //                     std::mem::transmute(tb);
-    //                 executor(&mut self.state.memory_, &mut self.state.register_file);
-    //             }
+    //         // instr_cnt += 1;
+    //         // self.state
+    //         //     .pot_tb
+    //         //     .entry(self.state.pc)
+    //         //     .and_modify(|(cnt, _)| {
+    //         //         *cnt += 1;
+    //         //     });
+
+    //         if self.execute_cycle(done_inv, &mut rng)? {
+    //             done = true;
+    //             break;
     //         }
+    //         // if self.state.is_jmp {
+    //         //     self.state
+    //         //         .pot_tb
+    //         //         .entry(self.state.prev_pc - self.state.tb_len)
+    //         //         .or_insert((0, self.state.tb_len));
+    //         //     self.state.is_jmp = false;
+    //         //     self.state.tb_len = 0;
+    //         // } else {
+    //         //     self.state.tb_len += 1;
+    //         // }
     //     }
 
     //     if done {
     //         self.postprocess();
     //     }
 
+    //     // let mut jit_cnt = 0;
+    //     // let mut aggr_count = 0;
+    //     // for (addr, (cnt, len)) in self.state.pot_tb.iter() {
+    //     //     if *len > 1 && *cnt > 1 {
+    //     //         println!("addr: {}: len {}: cnt {}", addr, len, cnt);
+    //     //         jit_cnt += cnt * len;
+    //     //         aggr_count += 1;
+    //     //     }
+    //     // }
+    //     // println!("instr_cnt: {}", instr_cnt);
+    //     // println!("aggr_count: {}", aggr_count);
+    //     // println!("jit_cnt: {}", jit_cnt);
+
     //     Ok(done)
     // }
+
+    pub fn tb_find_fast_or_compile(&mut self, fast_tb_cache: &mut FastTBCache, slow_tb_cache: &mut SlowTBCache) -> ExecutionMode {
+        if let Some(tb) = self.tb_find_fast(self.state.pc, self.unconstrained, fast_tb_cache) {
+            return ExecutionMode::TB(tb);
+        }
+
+        tb_compile(&mut self.state)
+    }
+
+    pub fn tb_find_fast(&mut self, pc: u32, unconstrained: bool, fast_tb_cache: &mut FastTBCache) -> Option<*const u8> {
+        None
+    }
+
+    /// Main loop
+    pub fn execute(&mut self) -> Result<bool, ExecutionError> {
+        // If it's the first cycle, initialize the program.
+        if self.state.global_clk == 0 {
+            self.initialize();
+        }
+
+        let mut rng = Rand::new();
+        let done_inv = (self.program.instructions.len() * 4) as u32;
+
+        let mut fast_tb_cache = FastTBCache::default();
+        let mut slow_tb_cache = SlowTBCache::default();
+
+        let done;
+        loop {
+            let tb = self.tb_find_fast_or_compile(&mut fast_tb_cache, &mut slow_tb_cache);
+            if let ExecutionMode::TB(tb) = tb {
+                unsafe {
+                    let executor: extern "C" fn(*mut Memory, *mut RegisterFile) -> u32 =
+                        std::mem::transmute(tb);
+                    executor(&mut self.state.memory_, &mut self.state.register_file);
+                }
+            } else {
+                if self.execute_cycle(done_inv, &mut rng)? {
+                    done = true;
+                    break;
+                }
+            }
+        }
+
+        if done {
+            self.postprocess();
+        }
+
+        Ok(done)
+    }
 
     fn postprocess(&mut self) {
         // Flush remaining stdout/stderr
@@ -1296,6 +1304,11 @@ impl Default for ExecutorMode {
 #[must_use]
 pub const fn align(addr: u32) -> u32 {
     addr - addr % 4
+}
+
+pub enum ExecutionMode {
+    TB(*const u8),
+    Emulator,
 }
 
 #[cfg(test)]

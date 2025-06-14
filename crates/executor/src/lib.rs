@@ -33,6 +33,8 @@ mod state;
 pub mod syscalls;
 mod utils;
 mod memory;
+mod jitwrapper;
+mod tb;
 
 pub use context::*;
 pub use executor::*;

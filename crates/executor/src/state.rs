@@ -1,49 +1,14 @@
 use std::{
-    fs::File, io::{Seek, Write}, ops::{Index, IndexMut}
+    fs::File, io::{Seek, Write}
 };
 
-use cranelift_jit::{JITBuilder, JITModule};
-use memmap2::{MmapMut};
 
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 
-use crate::{events::MemoryRecord, memory::{mem_load32, mem_store32}, syscalls::SyscallCode, ExecutorMode, Register, RegisterFile};
+use crate::{events::MemoryRecord, jitwrapper::JITWrapper, syscalls::SyscallCode, ExecutorMode, RegisterFile};
 
 use crate::memory::Memory;
-
-/// State JITWrapper to store module
-pub struct JITWrapper {
-    /// Common JITModule
-    pub jit: JITModule,
-}
-
-impl Default for JITWrapper {
-    fn default() -> Self {
-        let mut builder = JITBuilder::new(cranelift_module::default_libcall_names()).expect("failed to create JITBuilder");
-        // Create the JITModule first
-
-        builder.symbol("mem_load32",  mem_load32 as *const u8);
-        builder.symbol("mem_store32", mem_store32 as *const u8);
-    
-        let jit = JITModule::new(builder);
-        Self {
-            jit,
-        }
-    }
-}
-
-impl Clone for JITWrapper {
-    fn clone(&self) -> Self {
-        Self::default()
-    }
-}
-
-impl std::fmt::Debug for JITWrapper {
-    fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Ok(())
-    }
-}
 
 /// Holds data describing the current state of a program's execution.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
