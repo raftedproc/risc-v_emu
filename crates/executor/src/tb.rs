@@ -5,9 +5,13 @@ use cranelift_module::Module;
 use log::error;
 // use raki::{BaseIOpcode, Decode, Instruction, Isa, OpcodeKind};
 
-use crate::{ExecutionMode, ExecutionState};
+use crate::{jitwrapper::SlowTBCache, ExecutionMode, ExecutionState};
 
-pub fn tb_compile(state: &mut ExecutionState) -> ExecutionMode {
+fn tb_compile(state: &mut ExecutionState) -> ExecutionMode {
+    ExecutionMode::Emulator
+}
+
+pub fn try_to_compile_tb_and_populate_slow(state: &mut ExecutionState, unconstrained_mode: bool, slow_tb_cache: &mut SlowTBCache) -> ExecutionMode {
     ExecutionMode::Emulator
 }
 

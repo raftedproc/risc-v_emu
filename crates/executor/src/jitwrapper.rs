@@ -1,21 +1,22 @@
 use std::ops::{Index, IndexMut};
 
 use cranelift_jit::{JITBuilder, JITModule};
-use hashbrown::HashMap;
 
 use crate::memory::{mem_load32, mem_store32};
 
 #[derive(Debug, Copy, Clone)]
-pub struct TBFastCacheEntry {
+pub struct TBCacheEntry {
   pub tb: *const u8,
-  pub addr: u32,
+  pub pc: u32,
+  pub unconstrained: bool,
 }
 
-impl Default for TBFastCacheEntry {
+impl Default for TBCacheEntry {
   fn default() -> Self {
     Self {
       tb: std::ptr::null(),
-      addr: 0,
+      pc: 0,
+      unconstrained: false,
     }
   }
 }
@@ -26,27 +27,31 @@ pub struct JITWrapper {
   pub jit: JITModule,
 }
 
-pub struct TBCache<const I: usize>([Option<TBFastCacheEntry>; I]);
+pub struct TBCache<const S: usize>([Option<TBCacheEntry>; S]);
 
-impl<const I: usize> Default for TBCache<I> {
+impl<const S: usize> Default for TBCache<S> {
   fn default() -> Self {
     Self(core::array::from_fn(|_| None))
   }
 }
 
 impl<const I: usize> Index<usize> for TBCache<I> {
-  type Output = Option<TBFastCacheEntry>;
+  type Output = Option<TBCacheEntry>;
 
   fn index(&self, index: usize) -> &Self::Output {
     &self.0[index]
   }
 }
 
-impl<const I: usize> IndexMut<usize> for TBCache<I> {
+impl<const S: usize> IndexMut<usize> for TBCache<S> {
   fn index_mut(&mut self, index: usize) -> &mut Self::Output {
     &mut self.0[index]
   }
 }
+
+pub const FAST_CACHE_MASK: u32 = 0x3FF;
+pub const SLOW_CACHE_MASK: u32 = 0x10000;
+
 
 pub type FastTBCache = TBCache<1024>;
 pub type SlowTBCache = TBCache<16384>;

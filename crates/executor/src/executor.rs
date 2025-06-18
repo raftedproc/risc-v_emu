@@ -11,10 +11,18 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    context::SP1Context, events::{
+    context::SP1Context,
+    events::{
         create_alu_lookup_id, LookupId, MemoryAccessPosition, MemoryLocalEvent, MemoryReadRecord,
         MemoryRecord, MemoryWriteRecord,
-    }, hook::{HookEnv, HookRegistry}, jitwrapper::{FastTBCache, SlowTBCache}, memory::Memory, state::{ExecutionState, ForkState}, syscalls::{default_syscall_map, Syscall, SyscallCode, SyscallContext}, tb::tb_compile, Instruction, Opcode, Program, Register, RegisterFile
+    },
+    hook::{HookEnv, HookRegistry},
+    jitwrapper::{FastTBCache, SlowTBCache, TBCache, TBCacheEntry, FAST_CACHE_MASK, SLOW_CACHE_MASK},
+    memory::Memory,
+    state::{ExecutionState, ForkState},
+    syscalls::{default_syscall_map, Syscall, SyscallCode, SyscallContext},
+    tb::try_to_compile_tb_and_populate_slow,
+    Instruction, Opcode, Program, Register, RegisterFile,
 };
 
 /// An executor for the SP1 RISC-V zkVM.
@@ -396,13 +404,7 @@ impl<'a> Executor<'a> {
         // }
 
         // Construct the memory read record.
-        MemoryReadRecord::new(
-            record.value,
-            record.shard,
-            record.timestamp,
-            0,
-            0,
-        )
+        MemoryReadRecord::new(record.value, record.shard, record.timestamp, 0, 0)
     }
 
     /// Write a word to memory and create an access record.
@@ -445,7 +447,7 @@ impl<'a> Executor<'a> {
                 shard,
                 timestamp,
             });
-            
+
             self.unconstrained_state
                 .memory_diff
                 .entry(addr)
@@ -469,7 +471,6 @@ impl<'a> Executor<'a> {
         //         })
         //     }
         // };
-  
 
         // let prev_record = *record;
         let record = MemoryRecord {
@@ -505,14 +506,7 @@ impl<'a> Executor<'a> {
         // }
 
         // Construct the memory write record.
-        MemoryWriteRecord::new(
-            record.value,
-            record.shard,
-            record.timestamp,
-            0,
-            0,
-            0,
-        )
+        MemoryWriteRecord::new(record.value, record.shard, record.timestamp, 0, 0, 0)
     }
 
     /// Read from memory, assuming that all addresses are aligned.
@@ -1194,16 +1188,21 @@ impl<'a> Executor<'a> {
     //     Ok(done)
     // }
 
-    pub fn tb_find_fast_or_compile(&mut self, fast_tb_cache: &mut FastTBCache, slow_tb_cache: &mut SlowTBCache) -> ExecutionMode {
-        if let Some(tb) = self.tb_find_fast(self.state.pc, self.unconstrained, fast_tb_cache) {
+    pub fn tb_find_or_compile(
+        &mut self,
+        fast_tb_cache: &mut FastTBCache,
+        slow_tb_cache: &mut SlowTBCache,
+    ) -> ExecutionMode {
+        if let Some(tb) = tb_fast_cache_lookup(self.state.pc, self.unconstrained, fast_tb_cache) {
             return ExecutionMode::TB(tb);
         }
 
-        tb_compile(&mut self.state)
-    }
+        if let Some(tb) = tb_slow_cache_lookup(self.state.pc, self.unconstrained, slow_tb_cache) {
+            populate_fast(fast_tb_cache, self.state.pc, tb, self.unconstrained);
+            return ExecutionMode::TB(tb);
+        }
 
-    pub fn tb_find_fast(&mut self, pc: u32, unconstrained: bool, fast_tb_cache: &mut FastTBCache) -> Option<*const u8> {
-        None
+        try_to_compile_tb_and_populate_slow(&mut self.state, self.unconstrained, slow_tb_cache)
     }
 
     /// Main loop
@@ -1221,12 +1220,12 @@ impl<'a> Executor<'a> {
 
         let done;
         loop {
-            let tb = self.tb_find_fast_or_compile(&mut fast_tb_cache, &mut slow_tb_cache);
-            if let ExecutionMode::TB(tb) = tb {
+            let mode = self.tb_find_or_compile(&mut fast_tb_cache, &mut slow_tb_cache);
+            if let ExecutionMode::TB(tb) = mode {
                 unsafe {
-                    let executor: extern "C" fn(*mut Memory, *mut RegisterFile) -> u32 =
+                    let tb_executor: extern "C" fn(*mut Memory, *mut RegisterFile) -> u32 =
                         std::mem::transmute(tb);
-                    executor(&mut self.state.memory_, &mut self.state.register_file);
+                    tb_executor(&mut self.state.memory_, &mut self.state.register_file);
                 }
             } else {
                 if self.execute_cycle(done_inv, &mut rng)? {
@@ -1305,6 +1304,48 @@ impl Default for ExecutorMode {
 pub const fn align(addr: u32) -> u32 {
     addr - addr % 4
 }
+
+/// Search for TB in a cache
+pub fn tb_cache_lookup<const S: usize>(
+    current_pc: u32,
+    current_unconstrained: bool,
+    mask: u32,
+    fast_tb_cache: &mut TBCache<S>,
+) -> Option<*const u8> {
+    // TODO make the mask a named const
+    let idx = (current_pc >> 8 & mask) as usize;
+    let cache_entry = fast_tb_cache[idx];
+    match cache_entry {
+        Some(TBCacheEntry {
+            tb,
+            pc,
+            unconstrained,
+        }) if pc == current_pc && unconstrained == current_unconstrained => Some(tb),
+        _ => None,
+    }
+}
+
+/// Search for TB in a fast cache
+pub fn tb_fast_cache_lookup(
+    current_pc: u32,
+    current_unconstrained: bool,
+    fast_tb_cache: &mut FastTBCache,
+) -> Option<*const u8> {
+    tb_cache_lookup(current_pc, current_unconstrained, FAST_CACHE_MASK, fast_tb_cache)
+}
+
+fn tb_slow_cache_lookup(
+    current_pc: u32,
+    current_unconstrained: bool,
+    slow_tb_cache: &mut SlowTBCache,
+) -> Option<*const u8> {
+    tb_cache_lookup(current_pc, current_unconstrained, SLOW_CACHE_MASK, slow_tb_cache)
+}
+
+fn populate_fast(fast_tb_cache: &mut FastTBCache, current_pc: u32, current_unconstrained: bool, tb: *const u8, ) {
+    todo!()
+}
+
 
 pub enum ExecutionMode {
     TB(*const u8),
