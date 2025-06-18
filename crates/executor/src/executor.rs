@@ -614,7 +614,7 @@ impl<'a> Executor<'a> {
 
     /// Fetch the instruction at the current program counter.
     #[inline]
-    fn fetch(&self) -> Instruction {
+    pub fn fetch(&self) -> Instruction {
         let idx = ((self.state.pc - self.program.pc_base) / 4) as usize;
         self.program.instructions[idx]
     }
@@ -1194,6 +1194,7 @@ impl<'a> Executor<'a> {
         &mut self,
         fast_tb_cache: &mut FastTBCache,
         slow_tb_cache: &mut SlowTBCache,
+        jit_wrapper: &mut JITWrapper,
     ) -> ExecutionMode {
         if let Some(tb) = tb_fast_cache_lookup(self.state.pc, self.unconstrained, fast_tb_cache) {
             return ExecutionMode::TB(tb);
@@ -1204,11 +1205,8 @@ impl<'a> Executor<'a> {
             return ExecutionMode::TB(tb);
         }
 
-        try_to_compile_tb_and_populate_slow_cache(
-            &mut self.state,
-            self.unconstrained,
-            slow_tb_cache,
-        )
+        let executor = self;
+        try_to_compile_tb_and_populate_slow_cache(executor, jit_wrapper, slow_tb_cache)
     }
 
     /// Main loop
@@ -1223,10 +1221,12 @@ impl<'a> Executor<'a> {
 
         let mut fast_tb_cache = FastTBCache::default();
         let mut slow_tb_cache = SlowTBCache::default();
+        // TODO remove jw from the state
+        let mut jit_wrapper = JITWrapper::default();
 
         let done;
         loop {
-            let mode = self.tb_find_or_compile(&mut fast_tb_cache, &mut slow_tb_cache);
+            let mode = self.tb_find_or_compile(&mut fast_tb_cache, &mut slow_tb_cache, &mut jit_wrapper);
             if let ExecutionMode::TB(tb) = mode {
                 unsafe {
                     let tb_executor: extern "C" fn(*mut Memory, *mut RegisterFile) -> u32 =
