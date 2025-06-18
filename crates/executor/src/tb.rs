@@ -7,13 +7,57 @@ use log::error;
 
 use crate::{jitwrapper::SlowTBCache, ExecutionMode, ExecutionState};
 
-fn tb_compile(state: &mut ExecutionState) -> ExecutionMode {
+pub fn try_to_compile_tb_and_populate_slow_cache(state: &mut ExecutionState, unconstrained_mode: bool, slow_tb_cache: &mut SlowTBCache) -> ExecutionMode {
     ExecutionMode::Emulator
 }
 
-pub fn try_to_compile_tb_and_populate_slow(state: &mut ExecutionState, unconstrained_mode: bool, slow_tb_cache: &mut SlowTBCache) -> ExecutionMode {
-    ExecutionMode::Emulator
-}
+// pub fn compile_tb() {
+//     // pub fn compile_tb(state: &mut ExecutionState, /*jit: &mut JITModule, cpu: &Cpu*/ max_insns: usize) -> (*const u8, usize) {
+//     let jit = &mut state.jit_wrapper.jit;
+//     let mut ctx = jit.make_context();
+//     ctx.func.signature.params.push(AbiParam::new(types::I64)); // *mut Cpu
+//     ctx.func.signature.returns.push(AbiParam::new(types::I32)); // next PC
+
+//     let mut fctx = FunctionBuilderContext::new();
+//     let mut b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
+
+//     let entry = b.create_block();
+//     b.append_block_params_for_function_params(entry);
+//     b.switch_to_block(entry);
+
+//     let cpu_ptr = b.block_params(entry)[0]; // *mut Cpu as i64
+//     let regs: [Variable; 32] = core::array::from_fn(|i| Variable::from_u32(i as u32));
+//     // Track which registers have been modified during this TB
+//     let mut regs_read_or_changed_so_far = [false; 32];
+//     let mut dirty_regs = [false; 32];
+
+//     // объявим x0..x31 как переменные
+//     // use liveness analysis
+//     for i in 0..32 {
+//         b.declare_var(regs[i], types::I32);
+//     }
+
+//     let mut pc = cpu.pc;
+
+//     let mut cnt = 0;
+//     let mut term_was_added = false;
+//     while cnt < max_insns {
+//         let raw = cpu.load32(pc);
+//         // Handle the case where we might be reading beyond the program
+//         // (memory might be zeroed or have invalid instruction patterns)
+//         let inst = match raw.decode(Isa::Rv32) {
+//             Ok(inst) => {
+//                 println!("inst {:?}", inst);
+//                 inst
+//             }
+//             Err(e) => {
+//                 error!("Failed to decode instruction at pc={}: {:?}", pc, e);
+//                 // We've reached the end of the program, so break the loop
+//                 break;
+//             }
+//         };
+//     }
+// }
 
 // pub fn compile_tb(state: &mut ExecutionState, /*jit: &mut JITModule, cpu: &Cpu*/ max_insns: usize) -> (*const u8, usize) {
 //     let jit = &mut state.jit_wrapper.jit;

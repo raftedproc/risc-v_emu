@@ -17,11 +17,13 @@ use crate::{
         MemoryRecord, MemoryWriteRecord,
     },
     hook::{HookEnv, HookRegistry},
-    jitwrapper::{FastTBCache, SlowTBCache, TBCache, TBCacheEntry, FAST_CACHE_MASK, SLOW_CACHE_MASK},
+    jitwrapper::{
+        FastTBCache, JITWrapper, SlowTBCache, TBCache, TBCacheEntry, FAST_CACHE_MASK, SLOW_CACHE_MASK
+    },
     memory::Memory,
     state::{ExecutionState, ForkState},
     syscalls::{default_syscall_map, Syscall, SyscallCode, SyscallContext},
-    tb::try_to_compile_tb_and_populate_slow,
+    tb::try_to_compile_tb_and_populate_slow_cache,
     Instruction, Opcode, Program, Register, RegisterFile,
 };
 
@@ -1198,11 +1200,15 @@ impl<'a> Executor<'a> {
         }
 
         if let Some(tb) = tb_slow_cache_lookup(self.state.pc, self.unconstrained, slow_tb_cache) {
-            populate_fast(fast_tb_cache, self.state.pc, tb, self.unconstrained);
+            populate_fast_cache(self.state.pc, self.unconstrained, tb, fast_tb_cache);
             return ExecutionMode::TB(tb);
         }
 
-        try_to_compile_tb_and_populate_slow(&mut self.state, self.unconstrained, slow_tb_cache)
+        try_to_compile_tb_and_populate_slow_cache(
+            &mut self.state,
+            self.unconstrained,
+            slow_tb_cache,
+        )
     }
 
     /// Main loop
@@ -1331,7 +1337,12 @@ pub fn tb_fast_cache_lookup(
     current_unconstrained: bool,
     fast_tb_cache: &mut FastTBCache,
 ) -> Option<*const u8> {
-    tb_cache_lookup(current_pc, current_unconstrained, FAST_CACHE_MASK, fast_tb_cache)
+    tb_cache_lookup(
+        current_pc,
+        current_unconstrained,
+        FAST_CACHE_MASK,
+        fast_tb_cache,
+    )
 }
 
 fn tb_slow_cache_lookup(
@@ -1339,16 +1350,34 @@ fn tb_slow_cache_lookup(
     current_unconstrained: bool,
     slow_tb_cache: &mut SlowTBCache,
 ) -> Option<*const u8> {
-    tb_cache_lookup(current_pc, current_unconstrained, SLOW_CACHE_MASK, slow_tb_cache)
+    tb_cache_lookup(
+        current_pc,
+        current_unconstrained,
+        SLOW_CACHE_MASK,
+        slow_tb_cache,
+    )
 }
 
-fn populate_fast(fast_tb_cache: &mut FastTBCache, current_pc: u32, current_unconstrained: bool, tb: *const u8, ) {
-    todo!()
+fn populate_fast_cache(
+    current_pc: u32,
+    current_unconstrained: bool,
+    tb: *const u8,
+    fast_tb_cache: &mut FastTBCache,
+) {
+    let idx = (current_pc >> 8 & FAST_CACHE_MASK) as usize;
+
+    fast_tb_cache[idx] = Some(TBCacheEntry {
+        pc: current_pc,
+        unconstrained: current_unconstrained,
+        tb,
+    });
 }
 
-
+/// Enum to describe what is the next execution step mode is, e.g. Translated Block or Emulated instruction
 pub enum ExecutionMode {
+    /// Translated block mode with pointer to a block function
     TB(*const u8),
+    /// Emulated execution of a next instruction
     Emulator,
 }
 
