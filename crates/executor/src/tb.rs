@@ -8,8 +8,7 @@ use log::error;
 // use raki::{BaseIOpcode, Decode, Instruction, Isa, OpcodeKind};
 
 use crate::{
-    jitwrapper::{JITWrapper, SlowTBCache},
-    ExecutionMode, ExecutionState, Executor,
+    define_rd_and_mark_dirty, jitwrapper::{JITWrapper, SlowTBCache}, load_reg_if_needed_and_not_dirty, load_two_regs, memory::call_mem_load, register, ExecutionMode, ExecutionState, Executor
 };
 
 pub fn try_to_compile_tb_and_populate_slow_cache<'a>(
@@ -31,7 +30,8 @@ pub fn compile_tb<'a>(
     let jit = &mut jit_wrapper.jit;
 
     let mut ctx = jit.make_context();
-    ctx.func.signature.params.push(AbiParam::new(types::I64)); // *mut Cpu
+    ctx.func.signature.params.push(AbiParam::new(types::I64)); // *mut Registers    
+    ctx.func.signature.params.push(AbiParam::new(types::I64)); // *mut Memory
     ctx.func.signature.returns.push(AbiParam::new(types::I32)); // next PC
 
     let mut fctx = FunctionBuilderContext::new();
@@ -41,7 +41,8 @@ pub fn compile_tb<'a>(
     b.append_block_params_for_function_params(entry);
     b.switch_to_block(entry);
 
-    let cpu_ptr = b.block_params(entry)[0]; // *mut Cpu as i64
+    let register_file_ptr = b.block_params(entry)[0]; // *mut Registers as i64
+    let memory_ptr = b.block_params(entry)[1]; // *mut Memory as i64
     let regs: [Variable; 32] = core::array::from_fn(|i| Variable::from_u32(i as u32));
     // Track which registers have been modified during this TB
     let mut regs_read_or_changed_so_far = [false; 32];
@@ -58,941 +59,942 @@ pub fn compile_tb<'a>(
     let mut cnt = 0;
     let mut term_was_added = false;
     while cnt < max_insns {
-    //     let raw = executor.fetch();
-    //     println!("{:?}", raw);
-    //     match inst.opc {
-    //         OpcodeKind::BaseI(BaseIOpcode::ADDI) => {
-    //             let Instruction { rd, rs1, imm, .. } = inst;
-    //             // todo not needed to actually load rs1 if it is x0
-    //             let rs1 = load_reg_if_needed_and_not_dirty(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 rs1.unwrap(),
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 &regs,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let r = b.ins().iadd_imm(v1, imm.unwrap() as i64);
-
-    //             // regs_read_or_changed_so_far[rd.unwrap()] = true;
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, r);
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::ADD) => {
-    //             let Instruction { rd, rs1, rs2, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-    //             let v = b.ins().iadd(v1, v2);
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
-    //             println!("ADD dirty {:?}", dirty_regs);
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::SUB) => {
-    //             let Instruction { rd, rs1, rs2, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-    //             let v = b.ins().isub(v1, v2);
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::XOR) => {
-    //             let Instruction { rd, rs1, rs2, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-    //             let v = b.ins().bxor(v1, v2);
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::OR) => {
-    //             let Instruction { rd, rs1, rs2, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-
-    //             let v = b.ins().bor(v1, v2);
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::AND) => {
-    //             let Instruction { rd, rs1, rs2, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-
-    //             let v = b.ins().band(v1, v2);
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::SLL) => {
-    //             let Instruction { rd, rs1, rs2, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-
-    //             let v = b.ins().ishl(v1, v2);
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::SRL) => {
-    //             let Instruction { rd, rs1, rs2, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-
-    //             let v = b.ins().ushr(v1, v2);
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::SRA) => {
-    //             let Instruction { rd, rs1, rs2, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-
-    //             let v = b.ins().sshr(v1, v2); // Arithmetic (signed) shift right
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::SLT) => {
-    //             let Instruction { rd, rs1, rs2, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-
-    //             // Use icmp_slt to compare if v1 < v2 (signed comparison)
-    //             let cond = b.ins().icmp(IntCC::SignedLessThan, v1, v2);
-    //             let zero = b.ins().iconst(types::I32, 0);
-    //             let one = b.ins().iconst(types::I32, 1);
-    //             let v = b.ins().select(cond, one, zero);
-    //             let rd = rd.unwrap();
-    //             b.def_var(regs[rd], v);
-    //             dirty_regs[rd] = true;
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::SLTU) => {
-    //             let Instruction { rd, rs1, rs2, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-
-    //             // Using SLTU for unsigned comparison
-    //             let cond = b.ins().icmp(IntCC::UnsignedLessThan, v1, v2);
-    //             let zero = b.ins().iconst(types::I32, 0);
-    //             let one = b.ins().iconst(types::I32, 1);
-    //             let v = b.ins().select(cond, one, zero);
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::LB) => {
-    //             let Instruction { rd, rs1, imm, .. } = inst;
-    //             let rs1 = load_reg_if_needed_and_not_dirty(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 rs1.unwrap(),
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 &regs,
-    //             );
-
-    //             let base = b.use_var(regs[rs1]);
-    //             let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
-
-    //             // Call load32 (we don't have separate load8)
-    //             let val = call_mem_load(jit, &mut b, cpu_ptr, addr);
-
-    //             // Extract the byte and sign-extend it to 32 bits
-    //             let shift_amount = b.ins().iconst(types::I32, 24);
-    //             let byte_val = b.ins().ishl(val, shift_amount);
-    //             let signed_val = b.ins().sshr(byte_val, shift_amount);
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, signed_val);
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::LH) => {
-    //             let Instruction { rd, rs1, imm, .. } = inst;
-    //             let rs1 = load_reg_if_needed_and_not_dirty(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 rs1.unwrap(),
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 &regs,
-    //             );
-
-    //             let base = b.use_var(regs[rs1]);
-    //             let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
-
-    //             // Call load32 (we don't have separate load16)
-    //             let val = call_mem_load(jit, &mut b, cpu_ptr, addr);
-
-    //             // Extract the halfword and sign-extend it to 32 bits
-    //             let shift_amount = b.ins().iconst(types::I32, 16);
-    //             let hw_val = b.ins().ishl(val, shift_amount);
-    //             let signed_val = b.ins().sshr(hw_val, shift_amount);
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, signed_val);
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::LBU) => {
-    //             let Instruction { rd, rs1, imm, .. } = inst;
-    //             let rs1 = load_reg_if_needed_and_not_dirty(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 rs1.unwrap(),
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 &regs,
-    //             );
-
-    //             let base = b.use_var(regs[rs1]);
-    //             let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
-
-    //             // Call load32 (we don't have separate load8)
-    //             let val = call_mem_load(jit, &mut b, cpu_ptr, addr);
-
-    //             // Extract the byte (unsigned)
-    //             let mask = b.ins().iconst(types::I32, 0xFF);
-    //             let unsigned_val = b.ins().band(val, mask);
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, unsigned_val);
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::LHU) => {
-    //             let Instruction { rd, rs1, imm, .. } = inst;
-    //             let rs1 = load_reg_if_needed_and_not_dirty(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 rs1.unwrap(),
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 &regs,
-    //             );
-
-    //             let base = b.use_var(regs[rs1]);
-    //             let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
-
-    //             // Call load32 (we don't have separate load16)
-    //             let val = call_mem_load(jit, &mut b, cpu_ptr, addr);
-
-    //             // Extract the halfword (unsigned)
-    //             let mask = b.ins().iconst(types::I32, 0xFFFF);
-    //             let unsigned_val = b.ins().band(val, mask);
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, unsigned_val);
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::LW) => {
-    //             let Instruction { rd, rs1, imm, .. } = inst;
-
-    //             let rs1 = load_reg_if_needed_and_not_dirty(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 rs1.unwrap(),
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 &regs,
-    //             );
-
-    //             let base = b.use_var(regs[rs1]);
-    //             let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
-
-    //             let val = call_mem_load(jit, &mut b, cpu_ptr, addr);
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, val);
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::SB) => {
-    //             let Instruction { rs2, rs1, imm, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let base = b.use_var(regs[rs1]);
-    //             let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
-    //             let val = b.use_var(regs[rs2]);
-
-    //             call_mem_store(jit, &mut b, cpu_ptr, addr, val);
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::SH) => {
-    //             let Instruction { rs2, rs1, imm, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let base = b.use_var(regs[rs1]);
-    //             let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
-    //             let val = b.use_var(regs[rs2]);
-
-    //             call_mem_store(jit, &mut b, cpu_ptr, addr, val);
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::SW) => {
-    //             let Instruction { rs2, rs1, imm, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let base = b.use_var(regs[rs1]);
-    //             let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
-    //             let val = b.use_var(regs[rs2]);
-
-    //             call_mem_store(jit, &mut b, cpu_ptr, addr, val);
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::JALR) => {
-    //             let Instruction { rd, rs1, imm, .. } = inst;
-    //             let target = b.use_var(regs[rs1.unwrap()]);
-    //             let next = b.ins().iadd_imm(target, imm.unwrap() as i64);
-    //             let const_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, const_pc);
-
-    //             // quit early after J-instruction
-    //             store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
-
-    //             b.ins().return_(&[next]);
-    //             term_was_added = true;
-    //             cnt += 1;
-
-    //             break;
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::BEQ) => {
-    //             // Branch if equal - terminal instruction
-    //             let Instruction { rs1, rs2, imm, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-
-    //             // Compare rs1 and rs2
-    //             let cond = b.ins().icmp(IntCC::Equal, v1, v2);
-
-    //             // Calculate target and fallthrough addresses
-    //             // Calculate target address (pc + offset) ensuring proper casting
-    //             pc += 4;
-    //             let target_pc = b
-    //                 .ins()
-    //                 .iconst(types::I32, (pc as i64) + (imm.unwrap() as i64));
-    //             let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
-
-    //             // Select which PC to branch to based on condition
-    //             let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
-
-    //             // Terminate the current translation block
-    //             store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
-    //             b.ins().return_(&[next_pc]);
-    //             term_was_added = true;
-    //             cnt += 1;
-    //             break;
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::BNE) => {
-    //             // Branch if not equal - terminal instruction
-    //             let Instruction { rs1, rs2, imm, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-
-    //             // Compare rs1 and rs2
-    //             let cond = b.ins().icmp(IntCC::NotEqual, v1, v2);
-
-    //             pc += 4;
-
-    //             // Calculate target and fallthrough addresses
-    //             // Calculate target address (pc + offset) ensuring proper casting
-    //             let target_pc = b
-    //                 .ins()
-    //                 .iconst(types::I32, (pc as i64) + (imm.unwrap() as i64));
-    //             let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
-
-    //             // Select which PC to branch to based on condition
-    //             let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
-
-    //             // Terminate the current translation block
-    //             store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
-    //             b.ins().return_(&[next_pc]);
-    //             term_was_added = true;
-    //             cnt += 1;
-    //             break;
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::BLT) => {
-    //             // Branch if less than - terminal instruction
-    //             let Instruction { rs1, rs2, imm, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-
-    //             // Compare rs1 < rs2 (signed)
-    //             let cond = b.ins().icmp(IntCC::SignedLessThan, v1, v2);
-
-    //             pc += 4;
-
-    //             // Calculate target and fallthrough addresses
-    //             // Calculate target address (pc + offset) ensuring proper casting
-    //             let target_pc = b
-    //                 .ins()
-    //                 .iconst(types::I32, (pc as i64) + (imm.unwrap() as i64));
-    //             let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
-
-    //             // Select which PC to branch to based on condition
-    //             let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
-
-    //             // Terminate the current translation block
-    //             store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
-    //             b.ins().return_(&[next_pc]);
-    //             term_was_added = true;
-    //             cnt += 1;
-    //             break;
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::BGE) => {
-    //             // Branch if greater than or equal - terminal instruction
-    //             let Instruction { rs1, rs2, imm, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-
-    //             // Compare rs1 >= rs2 (signed)
-    //             let cond = b.ins().icmp(IntCC::SignedGreaterThanOrEqual, v1, v2);
-
-    //             // Calculate target and fallthrough addresses
-    //             // Calculate target address (pc + offset) ensuring proper casting
-    //             pc += 4;
-
-    //             let target_pc = b
-    //                 .ins()
-    //                 .iconst(types::I32, (pc as i64) + (imm.unwrap() as i64));
-    //             let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
-
-    //             // Select which PC to branch to based on condition
-    //             let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
-
-    //             // Terminate the current translation block
-    //             store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
-    //             b.ins().return_(&[next_pc]);
-    //             term_was_added = true;
-    //             cnt += 1;
-    //             break;
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::BLTU) => {
-    //             // Branch if less than unsigned - terminal instruction
-    //             let Instruction { rs1, rs2, imm, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-
-    //             // Compare rs1 < rs2 (unsigned)
-    //             let cond = b.ins().icmp(IntCC::UnsignedLessThan, v1, v2);
-
-    //             pc += 4;
-
-    //             // Calculate target and fallthrough addresses
-    //             // Calculate target address (pc + offset) ensuring proper casting
-    //             let target_pc = b
-    //                 .ins()
-    //                 .iconst(types::I32, (pc as i64) + (imm.unwrap() as i64));
-    //             let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
-
-    //             // Select which PC to branch to based on condition
-    //             let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
-
-    //             // Terminate the current translation block
-    //             store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
-    //             b.ins().return_(&[next_pc]);
-    //             term_was_added = true;
-    //             cnt += 1;
-    //             break;
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::BGEU) => {
-    //             // Branch if greater than or equal unsigned - terminal instruction
-    //             let Instruction { rs1, rs2, imm, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-
-    //             // Compare rs1 >= rs2 (unsigned)
-    //             let cond = b.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, v1, v2);
-
-    //             pc += 4;
-
-    //             // Calculate target and fallthrough addresses
-    //             // Calculate target address (pc + offset) ensuring proper casting
-    //             let target_pc = b
-    //                 .ins()
-    //                 .iconst(types::I32, (pc as i64) + (imm.unwrap() as i64));
-    //             let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
-
-    //             // Select which PC to branch to based on condition
-    //             let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
-
-    //             // Terminate the current translation block
-    //             store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
-    //             b.ins().return_(&[next_pc]);
-    //             term_was_added = true;
-    //             cnt += 1;
-    //             break;
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::JAL) => {
-    //             // Jump and link - terminal instruction
-    //             let Instruction { rd, imm, .. } = inst;
-
-    //             // Store return address (PC+4) in rd
-    //             let return_addr = b.ins().iconst(types::I32, (pc + 4) as i64);
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, return_addr);
-
-    //             // Calculate target address
-    //             let target_pc = b
-    //                 .ins()
-    //                 .iconst(types::I32, (pc as i64) + (imm.unwrap() as i64));
-
-    //             // Terminate the current translation block and jump to target
-    //             store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
-    //             b.ins().return_(&[target_pc]);
-    //             term_was_added = true;
-    //             cnt += 1;
-    //             break;
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::AUIPC) => {
-    //             // Add Upper Immediate to PC
-    //             let Instruction { rd, imm, .. } = inst;
-
-    //             let shifted_imm = imm.expect("imm is None");
-    //             let result = b
-    //                 .ins()
-    //                 .iconst(types::I32, (pc as i64) + (shifted_imm as i64));
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, result);
-    //         }
-    //         OpcodeKind::M(raki::MOpcode::MUL) => {
-    //             let Instruction { rd, rs1, rs2, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-    //             let v = b.ins().imul(v1, v2);
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
-    //         }
-    //         OpcodeKind::M(raki::MOpcode::MULH) => {
-    //             // Multiply high (signed x signed)
-    //             let Instruction { rd, rs1, rs2, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-
-    //             // We need to cast to i64, multiply, then get the high 32 bits
-    //             let v1_64 = b.ins().sextend(types::I64, v1);
-    //             let v2_64 = b.ins().sextend(types::I64, v2);
-    //             let mul_result = b.ins().imul(v1_64, v2_64);
-
-    //             // Shift right by 32 to get the high bits
-    //             let shift_amt = b.ins().iconst(types::I64, 32);
-    //             let high_bits = b.ins().ushr(mul_result, shift_amt);
-
-    //             // Truncate back to 32 bits
-    //             let result_32 = b.ins().ireduce(types::I32, high_bits);
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, result_32);
-    //         }
-    //         OpcodeKind::M(raki::MOpcode::MULHU) => {
-    //             // Multiply high (unsigned x unsigned)
-    //             let Instruction { rd, rs1, rs2, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-
-    //             // We need to cast to u64, multiply, then get the high 32 bits
-    //             let v1_64 = b.ins().uextend(types::I64, v1);
-    //             let v2_64 = b.ins().uextend(types::I64, v2);
-    //             let mul_result = b.ins().imul(v1_64, v2_64);
-
-    //             // Shift right by 32 to get the high bits
-    //             let shift_amt = b.ins().iconst(types::I64, 32);
-    //             let high_bits = b.ins().ushr(mul_result, shift_amt);
-
-    //             // Truncate back to 32 bits
-    //             let result_32 = b.ins().ireduce(types::I32, high_bits);
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, result_32);
-    //         }
-    //         OpcodeKind::M(raki::MOpcode::MULHSU) => {
-    //             // Multiply high (signed x unsigned)
-    //             let Instruction { rd, rs1, rs2, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-
-    //             // Mixed sign extension: rs1 is signed, rs2 is unsigned
-    //             let v1_64 = b.ins().sextend(types::I64, v1);
-    //             let v2_64 = b.ins().uextend(types::I64, v2);
-    //             let mul_result = b.ins().imul(v1_64, v2_64);
-
-    //             // Shift right by 32 to get the high bits
-    //             let shift_amt = b.ins().iconst(types::I64, 32);
-    //             let high_bits = b.ins().ushr(mul_result, shift_amt);
-
-    //             // Truncate back to 32 bits
-    //             let result_32 = b.ins().ireduce(types::I32, high_bits);
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, result_32);
-    //         }
-    //         OpcodeKind::M(raki::MOpcode::DIV) => {
-    //             // Signed division
-    //             let Instruction { rd, rs1, rs2, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-
-    //             // Check for division by zero
-    //             let zero = b.ins().iconst(types::I32, 0);
-    //             let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
-    //             let min_int = b.ins().iconst(types::I32, -2147483648_i32 as i64); // 0x80000000
-    //             let neg_one = b.ins().iconst(types::I32, -1_i32 as i64);
-    //             let cmp_with_min = b.ins().icmp(IntCC::Equal, v1, min_int);
-    //             let cmp_with_neg_one = b.ins().icmp(IntCC::Equal, v2, neg_one);
-    //             let is_overflow = b.ins().band(cmp_with_min, cmp_with_neg_one);
-
-    //             // Normal division result
-    //             let div_result = b.ins().sdiv(v1, v2);
-
-    //             // Select based on special cases
-    //             let overflow_result = min_int; // For overflow, return MIN_INT
-    //             let zero_result = neg_one; // For div by zero, return -1
-
-    //             let temp_result = b.ins().select(is_overflow, overflow_result, div_result);
-    //             let final_result = b.ins().select(is_zero, zero_result, temp_result);
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, final_result);
-    //         }
-    //         OpcodeKind::M(raki::MOpcode::DIVU) => {
-    //             // Unsigned division
-    //             let Instruction { rd, rs1, rs2, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-
-    //             // Check for division by zero
-    //             let zero = b.ins().iconst(types::I32, 0);
-    //             let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
-
-    //             // Normal division result
-    //             let div_result = b.ins().udiv(v1, v2);
-
-    //             // For division by zero, return all 1s (UINT_MAX)
-    //             let max_uint = b.ins().iconst(types::I32, -1_i32 as i64); // 0xFFFFFFFF
-
-    //             let final_result = b.ins().select(is_zero, max_uint, div_result);
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, final_result);
-    //         }
-    //         OpcodeKind::M(raki::MOpcode::REM) => {
-    //             // Signed remainder
-    //             let Instruction { rd, rs1, rs2, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-
-    //             // Check for division by zero or special case
-    //             let zero = b.ins().iconst(types::I32, 0);
-    //             let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
-    //             let min_int = b.ins().iconst(types::I32, -2147483648_i32 as i64); // 0x80000000
-    //             let neg_one = b.ins().iconst(types::I32, -1_i32 as i64);
-
-    //             let cmp_with_min = b.ins().icmp(IntCC::Equal, v1, min_int);
-    //             let cmp_with_neg_one = b.ins().icmp(IntCC::Equal, v2, neg_one);
-    //             let is_special_case = b.ins().band(cmp_with_min, cmp_with_neg_one);
-
-    //             // Normal remainder result
-    //             let rem_result = b.ins().srem(v1, v2);
-
-    //             // For div by zero, return the dividend
-    //             // For special case, return 0
-    //             let special_result = zero;
-
-    //             let temp_result = b.ins().select(is_special_case, special_result, rem_result);
-    //             let final_result = b.ins().select(is_zero, v1, temp_result);
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, final_result);
-    //         }
-    //         OpcodeKind::M(raki::MOpcode::REMU) => {
-    //             // Unsigned remainder
-    //             let Instruction { rd, rs1, rs2, .. } = inst;
-    //             let (rs1, rs2) = load_two_regs(
-    //                 &mut b,
-    //                 cpu_ptr,
-    //                 &regs,
-    //                 &mut regs_read_or_changed_so_far,
-    //                 &mut dirty_regs,
-    //                 rs1,
-    //                 rs2,
-    //             );
-
-    //             let v1 = b.use_var(regs[rs1]);
-    //             let v2 = b.use_var(regs[rs2]);
-
-    //             // Check for division by zero
-    //             let zero = b.ins().iconst(types::I32, 0);
-    //             let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
-
-    //             // Normal remainder result
-    //             let rem_result = b.ins().urem(v1, v2);
-
-    //             // For div by zero, return the dividend
-    //             let final_result = b.ins().select(is_zero, v1, rem_result);
-
-    //             define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, final_result);
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::ECALL) => {
-    //             // Placeholder for ECALL as requested
-    //             // ECALL should be a terminal instruction
-    //             store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
-
-    //             // Return a special value to indicate an ECALL (could be handled by the main loop)
-    //             let ecall_indicator = b.ins().iconst(types::I32, 0xECA11);
-    //             b.ins().return_(&[ecall_indicator]);
-    //             term_was_added = true;
-    //             cnt += 1;
-    //             break;
-    //         }
-    //         OpcodeKind::BaseI(BaseIOpcode::EBREAK) => {
-    //             // Environment break - terminal instruction
-    //             store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
-
-    //             // Return a special value to indicate an EBREAK (could be handled by the main loop)
-    //             let ebreak_indicator = b.ins().iconst(types::I32, 0xEB8EA);
-    //             b.ins().return_(&[ebreak_indicator]);
-    //             term_was_added = true;
-    //             cnt += 1;
-    //             break;
-    //         }
-    //         _ => unimplemented!("demo supports few instrs"),
-    //     }
+        println!("cnt: {}", cnt);
+        let instr = executor.fetch();
+        println!("{:?}", instr);
+        // match instr.opcode {
+        //     OpcodeKind::BaseI(BaseIOpcode::ADDI) => {
+        //         let Instruction { rd, rs1, imm, .. } = inst;
+        //         // todo not needed to actually load rs1 if it is x0
+        //         let rs1 = load_reg_if_needed_and_not_dirty(
+        //             &mut b,
+        //             register_file_ptr,
+        //             rs1.unwrap(),
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             &regs,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let r = b.ins().iadd_imm(v1, imm.unwrap() as i64);
+
+        //         // regs_read_or_changed_so_far[rd.unwrap()] = true;
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, r);
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::ADD) => {
+        //         let Instruction { rd, rs1, rs2, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             register_file_ptr,
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+        //         let v = b.ins().iadd(v1, v2);
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
+        //         println!("ADD dirty {:?}", dirty_regs);
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::SUB) => {
+        //         let Instruction { rd, rs1, rs2, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             register_file_ptr
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+        //         let v = b.ins().isub(v1, v2);
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::XOR) => {
+        //         let Instruction { rd, rs1, rs2, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             register_file_ptr
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+        //         let v = b.ins().bxor(v1, v2);
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::OR) => {
+        //         let Instruction { rd, rs1, rs2, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             register_file_ptr
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+
+        //         let v = b.ins().bor(v1, v2);
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::AND) => {
+        //         let Instruction { rd, rs1, rs2, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             register_file_ptr
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+
+        //         let v = b.ins().band(v1, v2);
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::SLL) => {
+        //         let Instruction { rd, rs1, rs2, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             register_file_ptr
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+
+        //         let v = b.ins().ishl(v1, v2);
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::SRL) => {
+        //         let Instruction { rd, rs1, rs2, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             register_file_ptr
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+
+        //         let v = b.ins().ushr(v1, v2);
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::SRA) => {
+        //         let Instruction { rd, rs1, rs2, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             register_file_ptr
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+
+        //         let v = b.ins().sshr(v1, v2); // Arithmetic (signed) shift right
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::SLT) => {
+        //         let Instruction { rd, rs1, rs2, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             register_file_ptr
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+
+        //         // Use icmp_slt to compare if v1 < v2 (signed comparison)
+        //         let cond = b.ins().icmp(IntCC::SignedLessThan, v1, v2);
+        //         let zero = b.ins().iconst(types::I32, 0);
+        //         let one = b.ins().iconst(types::I32, 1);
+        //         let v = b.ins().select(cond, one, zero);
+        //         let rd = rd.unwrap();
+        //         b.def_var(regs[rd], v);
+        //         dirty_regs[rd] = true;
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::SLTU) => {
+        //         let Instruction { rd, rs1, rs2, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             register_file_ptr
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+
+        //         // Using SLTU for unsigned comparison
+        //         let cond = b.ins().icmp(IntCC::UnsignedLessThan, v1, v2);
+        //         let zero = b.ins().iconst(types::I32, 0);
+        //         let one = b.ins().iconst(types::I32, 1);
+        //         let v = b.ins().select(cond, one, zero);
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::LB) => {
+        //         let Instruction { rd, rs1, imm, .. } = inst;
+        //         let rs1 = load_reg_if_needed_and_not_dirty(
+        //             &mut b,
+        //             register_file_ptr
+        //             rs1.unwrap(),
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             &regs,
+        //         );
+
+        //         let base = b.use_var(regs[rs1]);
+        //         let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
+
+        //         // Call load32 (we don't have separate load8)
+        //         let val = call_mem_load(jit, &mut b, memory_ptr, addr);
+
+        //         // Extract the byte and sign-extend it to 32 bits
+        //         let shift_amount = b.ins().iconst(types::I32, 24);
+        //         let byte_val = b.ins().ishl(val, shift_amount);
+        //         let signed_val = b.ins().sshr(byte_val, shift_amount);
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, signed_val);
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::LH) => {
+        //         let Instruction { rd, rs1, imm, .. } = inst;
+        //         let rs1 = load_reg_if_needed_and_not_dirty(
+        //             &mut b,
+        //             cpu_ptr,
+        //             rs1.unwrap(),
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             &regs,
+        //         );
+
+        //         let base = b.use_var(regs[rs1]);
+        //         let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
+
+        //         // Call load32 (we don't have separate load16)
+        //         let val = call_mem_load(jit, &mut b, cpu_ptr, addr);
+
+        //         // Extract the halfword and sign-extend it to 32 bits
+        //         let shift_amount = b.ins().iconst(types::I32, 16);
+        //         let hw_val = b.ins().ishl(val, shift_amount);
+        //         let signed_val = b.ins().sshr(hw_val, shift_amount);
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, signed_val);
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::LBU) => {
+        //         let Instruction { rd, rs1, imm, .. } = inst;
+        //         let rs1 = load_reg_if_needed_and_not_dirty(
+        //             &mut b,
+        //             cpu_ptr,
+        //             rs1.unwrap(),
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             &regs,
+        //         );
+
+        //         let base = b.use_var(regs[rs1]);
+        //         let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
+
+        //         // Call load32 (we don't have separate load8)
+        //         let val = call_mem_load(jit, &mut b, cpu_ptr, addr);
+
+        //         // Extract the byte (unsigned)
+        //         let mask = b.ins().iconst(types::I32, 0xFF);
+        //         let unsigned_val = b.ins().band(val, mask);
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, unsigned_val);
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::LHU) => {
+        //         let Instruction { rd, rs1, imm, .. } = inst;
+        //         let rs1 = load_reg_if_needed_and_not_dirty(
+        //             &mut b,
+        //             cpu_ptr,
+        //             rs1.unwrap(),
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             &regs,
+        //         );
+
+        //         let base = b.use_var(regs[rs1]);
+        //         let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
+
+        //         // Call load32 (we don't have separate load16)
+        //         let val = call_mem_load(jit, &mut b, cpu_ptr, addr);
+
+        //         // Extract the halfword (unsigned)
+        //         let mask = b.ins().iconst(types::I32, 0xFFFF);
+        //         let unsigned_val = b.ins().band(val, mask);
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, unsigned_val);
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::LW) => {
+        //         let Instruction { rd, rs1, imm, .. } = inst;
+
+        //         let rs1 = load_reg_if_needed_and_not_dirty(
+        //             &mut b,
+        //             cpu_ptr,
+        //             rs1.unwrap(),
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             &regs,
+        //         );
+
+        //         let base = b.use_var(regs[rs1]);
+        //         let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
+
+        //         let val = call_mem_load(jit, &mut b, cpu_ptr, addr);
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, val);
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::SB) => {
+        //         let Instruction { rs2, rs1, imm, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             cpu_ptr,
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let base = b.use_var(regs[rs1]);
+        //         let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
+        //         let val = b.use_var(regs[rs2]);
+
+        //         call_mem_store(jit, &mut b, cpu_ptr, addr, val);
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::SH) => {
+        //         let Instruction { rs2, rs1, imm, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             cpu_ptr,
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let base = b.use_var(regs[rs1]);
+        //         let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
+        //         let val = b.use_var(regs[rs2]);
+
+        //         call_mem_store(jit, &mut b, cpu_ptr, addr, val);
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::SW) => {
+        //         let Instruction { rs2, rs1, imm, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             cpu_ptr,
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let base = b.use_var(regs[rs1]);
+        //         let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
+        //         let val = b.use_var(regs[rs2]);
+
+        //         call_mem_store(jit, &mut b, cpu_ptr, addr, val);
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::JALR) => {
+        //         let Instruction { rd, rs1, imm, .. } = inst;
+        //         let target = b.use_var(regs[rs1.unwrap()]);
+        //         let next = b.ins().iadd_imm(target, imm.unwrap() as i64);
+        //         let const_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, const_pc);
+
+        //         // quit early after J-instruction
+        //         store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
+
+        //         b.ins().return_(&[next]);
+        //         term_was_added = true;
+        //         cnt += 1;
+
+        //         break;
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::BEQ) => {
+        //         // Branch if equal - terminal instruction
+        //         let Instruction { rs1, rs2, imm, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             cpu_ptr,
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+
+        //         // Compare rs1 and rs2
+        //         let cond = b.ins().icmp(IntCC::Equal, v1, v2);
+
+        //         // Calculate target and fallthrough addresses
+        //         // Calculate target address (pc + offset) ensuring proper casting
+        //         pc += 4;
+        //         let target_pc = b
+        //             .ins()
+        //             .iconst(types::I32, (pc as i64) + (imm.unwrap() as i64));
+        //         let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
+
+        //         // Select which PC to branch to based on condition
+        //         let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
+
+        //         // Terminate the current translation block
+        //         store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
+        //         b.ins().return_(&[next_pc]);
+        //         term_was_added = true;
+        //         cnt += 1;
+        //         break;
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::BNE) => {
+        //         // Branch if not equal - terminal instruction
+        //         let Instruction { rs1, rs2, imm, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             cpu_ptr,
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+
+        //         // Compare rs1 and rs2
+        //         let cond = b.ins().icmp(IntCC::NotEqual, v1, v2);
+
+        //         pc += 4;
+
+        //         // Calculate target and fallthrough addresses
+        //         // Calculate target address (pc + offset) ensuring proper casting
+        //         let target_pc = b
+        //             .ins()
+        //             .iconst(types::I32, (pc as i64) + (imm.unwrap() as i64));
+        //         let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
+
+        //         // Select which PC to branch to based on condition
+        //         let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
+
+        //         // Terminate the current translation block
+        //         store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
+        //         b.ins().return_(&[next_pc]);
+        //         term_was_added = true;
+        //         cnt += 1;
+        //         break;
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::BLT) => {
+        //         // Branch if less than - terminal instruction
+        //         let Instruction { rs1, rs2, imm, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             cpu_ptr,
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+
+        //         // Compare rs1 < rs2 (signed)
+        //         let cond = b.ins().icmp(IntCC::SignedLessThan, v1, v2);
+
+        //         pc += 4;
+
+        //         // Calculate target and fallthrough addresses
+        //         // Calculate target address (pc + offset) ensuring proper casting
+        //         let target_pc = b
+        //             .ins()
+        //             .iconst(types::I32, (pc as i64) + (imm.unwrap() as i64));
+        //         let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
+
+        //         // Select which PC to branch to based on condition
+        //         let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
+
+        //         // Terminate the current translation block
+        //         store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
+        //         b.ins().return_(&[next_pc]);
+        //         term_was_added = true;
+        //         cnt += 1;
+        //         break;
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::BGE) => {
+        //         // Branch if greater than or equal - terminal instruction
+        //         let Instruction { rs1, rs2, imm, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             cpu_ptr,
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+
+        //         // Compare rs1 >= rs2 (signed)
+        //         let cond = b.ins().icmp(IntCC::SignedGreaterThanOrEqual, v1, v2);
+
+        //         // Calculate target and fallthrough addresses
+        //         // Calculate target address (pc + offset) ensuring proper casting
+        //         pc += 4;
+
+        //         let target_pc = b
+        //             .ins()
+        //             .iconst(types::I32, (pc as i64) + (imm.unwrap() as i64));
+        //         let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
+
+        //         // Select which PC to branch to based on condition
+        //         let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
+
+        //         // Terminate the current translation block
+        //         store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
+        //         b.ins().return_(&[next_pc]);
+        //         term_was_added = true;
+        //         cnt += 1;
+        //         break;
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::BLTU) => {
+        //         // Branch if less than unsigned - terminal instruction
+        //         let Instruction { rs1, rs2, imm, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             cpu_ptr,
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+
+        //         // Compare rs1 < rs2 (unsigned)
+        //         let cond = b.ins().icmp(IntCC::UnsignedLessThan, v1, v2);
+
+        //         pc += 4;
+
+        //         // Calculate target and fallthrough addresses
+        //         // Calculate target address (pc + offset) ensuring proper casting
+        //         let target_pc = b
+        //             .ins()
+        //             .iconst(types::I32, (pc as i64) + (imm.unwrap() as i64));
+        //         let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
+
+        //         // Select which PC to branch to based on condition
+        //         let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
+
+        //         // Terminate the current translation block
+        //         store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
+        //         b.ins().return_(&[next_pc]);
+        //         term_was_added = true;
+        //         cnt += 1;
+        //         break;
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::BGEU) => {
+        //         // Branch if greater than or equal unsigned - terminal instruction
+        //         let Instruction { rs1, rs2, imm, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             cpu_ptr,
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+
+        //         // Compare rs1 >= rs2 (unsigned)
+        //         let cond = b.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, v1, v2);
+
+        //         pc += 4;
+
+        //         // Calculate target and fallthrough addresses
+        //         // Calculate target address (pc + offset) ensuring proper casting
+        //         let target_pc = b
+        //             .ins()
+        //             .iconst(types::I32, (pc as i64) + (imm.unwrap() as i64));
+        //         let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
+
+        //         // Select which PC to branch to based on condition
+        //         let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
+
+        //         // Terminate the current translation block
+        //         store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
+        //         b.ins().return_(&[next_pc]);
+        //         term_was_added = true;
+        //         cnt += 1;
+        //         break;
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::JAL) => {
+        //         // Jump and link - terminal instruction
+        //         let Instruction { rd, imm, .. } = inst;
+
+        //         // Store return address (PC+4) in rd
+        //         let return_addr = b.ins().iconst(types::I32, (pc + 4) as i64);
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, return_addr);
+
+        //         // Calculate target address
+        //         let target_pc = b
+        //             .ins()
+        //             .iconst(types::I32, (pc as i64) + (imm.unwrap() as i64));
+
+        //         // Terminate the current translation block and jump to target
+        //         store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
+        //         b.ins().return_(&[target_pc]);
+        //         term_was_added = true;
+        //         cnt += 1;
+        //         break;
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::AUIPC) => {
+        //         // Add Upper Immediate to PC
+        //         let Instruction { rd, imm, .. } = inst;
+
+        //         let shifted_imm = imm.expect("imm is None");
+        //         let result = b
+        //             .ins()
+        //             .iconst(types::I32, (pc as i64) + (shifted_imm as i64));
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, result);
+        //     }
+        //     OpcodeKind::M(raki::MOpcode::MUL) => {
+        //         let Instruction { rd, rs1, rs2, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             cpu_ptr,
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+        //         let v = b.ins().imul(v1, v2);
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
+        //     }
+        //     OpcodeKind::M(raki::MOpcode::MULH) => {
+        //         // Multiply high (signed x signed)
+        //         let Instruction { rd, rs1, rs2, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             cpu_ptr,
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+
+        //         // We need to cast to i64, multiply, then get the high 32 bits
+        //         let v1_64 = b.ins().sextend(types::I64, v1);
+        //         let v2_64 = b.ins().sextend(types::I64, v2);
+        //         let mul_result = b.ins().imul(v1_64, v2_64);
+
+        //         // Shift right by 32 to get the high bits
+        //         let shift_amt = b.ins().iconst(types::I64, 32);
+        //         let high_bits = b.ins().ushr(mul_result, shift_amt);
+
+        //         // Truncate back to 32 bits
+        //         let result_32 = b.ins().ireduce(types::I32, high_bits);
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, result_32);
+        //     }
+        //     OpcodeKind::M(raki::MOpcode::MULHU) => {
+        //         // Multiply high (unsigned x unsigned)
+        //         let Instruction { rd, rs1, rs2, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             cpu_ptr,
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+
+        //         // We need to cast to u64, multiply, then get the high 32 bits
+        //         let v1_64 = b.ins().uextend(types::I64, v1);
+        //         let v2_64 = b.ins().uextend(types::I64, v2);
+        //         let mul_result = b.ins().imul(v1_64, v2_64);
+
+        //         // Shift right by 32 to get the high bits
+        //         let shift_amt = b.ins().iconst(types::I64, 32);
+        //         let high_bits = b.ins().ushr(mul_result, shift_amt);
+
+        //         // Truncate back to 32 bits
+        //         let result_32 = b.ins().ireduce(types::I32, high_bits);
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, result_32);
+        //     }
+        //     OpcodeKind::M(raki::MOpcode::MULHSU) => {
+        //         // Multiply high (signed x unsigned)
+        //         let Instruction { rd, rs1, rs2, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             cpu_ptr,
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+
+        //         // Mixed sign extension: rs1 is signed, rs2 is unsigned
+        //         let v1_64 = b.ins().sextend(types::I64, v1);
+        //         let v2_64 = b.ins().uextend(types::I64, v2);
+        //         let mul_result = b.ins().imul(v1_64, v2_64);
+
+        //         // Shift right by 32 to get the high bits
+        //         let shift_amt = b.ins().iconst(types::I64, 32);
+        //         let high_bits = b.ins().ushr(mul_result, shift_amt);
+
+        //         // Truncate back to 32 bits
+        //         let result_32 = b.ins().ireduce(types::I32, high_bits);
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, result_32);
+        //     }
+        //     OpcodeKind::M(raki::MOpcode::DIV) => {
+        //         // Signed division
+        //         let Instruction { rd, rs1, rs2, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             cpu_ptr,
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+
+        //         // Check for division by zero
+        //         let zero = b.ins().iconst(types::I32, 0);
+        //         let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
+        //         let min_int = b.ins().iconst(types::I32, -2147483648_i32 as i64); // 0x80000000
+        //         let neg_one = b.ins().iconst(types::I32, -1_i32 as i64);
+        //         let cmp_with_min = b.ins().icmp(IntCC::Equal, v1, min_int);
+        //         let cmp_with_neg_one = b.ins().icmp(IntCC::Equal, v2, neg_one);
+        //         let is_overflow = b.ins().band(cmp_with_min, cmp_with_neg_one);
+
+        //         // Normal division result
+        //         let div_result = b.ins().sdiv(v1, v2);
+
+        //         // Select based on special cases
+        //         let overflow_result = min_int; // For overflow, return MIN_INT
+        //         let zero_result = neg_one; // For div by zero, return -1
+
+        //         let temp_result = b.ins().select(is_overflow, overflow_result, div_result);
+        //         let final_result = b.ins().select(is_zero, zero_result, temp_result);
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, final_result);
+        //     }
+        //     OpcodeKind::M(raki::MOpcode::DIVU) => {
+        //         // Unsigned division
+        //         let Instruction { rd, rs1, rs2, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             cpu_ptr,
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+
+        //         // Check for division by zero
+        //         let zero = b.ins().iconst(types::I32, 0);
+        //         let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
+
+        //         // Normal division result
+        //         let div_result = b.ins().udiv(v1, v2);
+
+        //         // For division by zero, return all 1s (UINT_MAX)
+        //         let max_uint = b.ins().iconst(types::I32, -1_i32 as i64); // 0xFFFFFFFF
+
+        //         let final_result = b.ins().select(is_zero, max_uint, div_result);
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, final_result);
+        //     }
+        //     OpcodeKind::M(raki::MOpcode::REM) => {
+        //         // Signed remainder
+        //         let Instruction { rd, rs1, rs2, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             cpu_ptr,
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+
+        //         // Check for division by zero or special case
+        //         let zero = b.ins().iconst(types::I32, 0);
+        //         let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
+        //         let min_int = b.ins().iconst(types::I32, -2147483648_i32 as i64); // 0x80000000
+        //         let neg_one = b.ins().iconst(types::I32, -1_i32 as i64);
+
+        //         let cmp_with_min = b.ins().icmp(IntCC::Equal, v1, min_int);
+        //         let cmp_with_neg_one = b.ins().icmp(IntCC::Equal, v2, neg_one);
+        //         let is_special_case = b.ins().band(cmp_with_min, cmp_with_neg_one);
+
+        //         // Normal remainder result
+        //         let rem_result = b.ins().srem(v1, v2);
+
+        //         // For div by zero, return the dividend
+        //         // For special case, return 0
+        //         let special_result = zero;
+
+        //         let temp_result = b.ins().select(is_special_case, special_result, rem_result);
+        //         let final_result = b.ins().select(is_zero, v1, temp_result);
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, final_result);
+        //     }
+        //     OpcodeKind::M(raki::MOpcode::REMU) => {
+        //         // Unsigned remainder
+        //         let Instruction { rd, rs1, rs2, .. } = inst;
+        //         let (rs1, rs2) = load_two_regs(
+        //             &mut b,
+        //             cpu_ptr,
+        //             &regs,
+        //             &mut regs_read_or_changed_so_far,
+        //             &mut dirty_regs,
+        //             rs1,
+        //             rs2,
+        //         );
+
+        //         let v1 = b.use_var(regs[rs1]);
+        //         let v2 = b.use_var(regs[rs2]);
+
+        //         // Check for division by zero
+        //         let zero = b.ins().iconst(types::I32, 0);
+        //         let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
+
+        //         // Normal remainder result
+        //         let rem_result = b.ins().urem(v1, v2);
+
+        //         // For div by zero, return the dividend
+        //         let final_result = b.ins().select(is_zero, v1, rem_result);
+
+        //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, final_result);
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::ECALL) => {
+        //         // Placeholder for ECALL as requested
+        //         // ECALL should be a terminal instruction
+        //         store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
+
+        //         // Return a special value to indicate an ECALL (could be handled by the main loop)
+        //         let ecall_indicator = b.ins().iconst(types::I32, 0xECA11);
+        //         b.ins().return_(&[ecall_indicator]);
+        //         term_was_added = true;
+        //         cnt += 1;
+        //         break;
+        //     }
+        //     OpcodeKind::BaseI(BaseIOpcode::EBREAK) => {
+        //         // Environment break - terminal instruction
+        //         store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
+
+        //         // Return a special value to indicate an EBREAK (could be handled by the main loop)
+        //         let ebreak_indicator = b.ins().iconst(types::I32, 0xEB8EA);
+        //         b.ins().return_(&[ebreak_indicator]);
+        //         term_was_added = true;
+        //         cnt += 1;
+        //         break;
+        //     }
+        //     _ => unimplemented!("demo supports few instrs"),
+        // }
         pc += 4;
         cnt += 1;
     }
 
-    // если дошли до лимита, вернуть следующий PC
-    // if cnt == max_insns || !term_was_added {
-    //     store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
-    //     let rvals = &[b.ins().iconst(types::I32, pc as i64)];
-    //     b.ins().return_(rvals);
-    // }
+    // return next PC if we reached the limit or if there was no terminal instruction
+    if cnt == max_insns || !term_was_added {
+        // store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
+        let rvals = &[b.ins().iconst(types::I32, pc as i64)];
+        b.ins().return_(rvals);
+    }
 
     b.seal_all_blocks();
     // replace with ctx.func.signature ?
