@@ -131,7 +131,9 @@ impl Register {
 
 #[repr(C)]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Register file
 pub struct RegisterFile {
+    /// Array of registers
     pub registers: [MemoryRecord; Register::number_of_registers()],
 }
 
@@ -146,5 +148,110 @@ impl Index<Register> for RegisterFile {
 impl IndexMut<Register> for RegisterFile {
     fn index_mut(&mut self, index: Register) -> &mut Self::Output {
         &mut self.registers[index as usize]
+    }
+}
+
+/// Register load helper 
+pub extern "C" fn reg_store(registers: &mut RegisterFile, reg: u32, val: u32) {
+    registers.registers[reg as usize].value = val;
+}
+
+/// Register load helper 
+pub extern "C" fn reg_load(registers: &mut RegisterFile, reg: u32) -> u32 {
+    registers.registers[reg as usize].value
+}
+
+use cranelift_codegen::ir::{ExtFuncData, ExternalName, InstBuilder, MemFlags, Signature, UserExternalNameRef};
+use cranelift_codegen::ir::{types, AbiParam, Value};
+use cranelift_frontend::FunctionBuilder;
+use cranelift_frontend::Variable;
+use cranelift_jit::JITModule;
+use cranelift_module::{FuncId, Linkage, Module};
+
+/// Helper function to load two registers if needed and not dirty
+pub fn load_two_regs(
+    b: &mut FunctionBuilder<'_>,
+    cpu_ptr: Value,
+    regs: &[Variable; 32],
+    regs_read_so_far: &mut [bool; 32],
+    regs_dirty: &mut [bool;32],
+    rs1: Option<usize>,
+    rs2: Option<usize>,
+) -> (usize, usize) {
+    let rs1 = load_reg_if_needed_and_not_dirty(b, cpu_ptr, rs1.unwrap(), regs_read_so_far, regs_dirty, regs);
+    let rs2 = load_reg_if_needed_and_not_dirty(b, cpu_ptr, rs2.unwrap(), regs_read_so_far, regs_dirty, regs);
+    (rs1, rs2)
+}
+
+/// Helper function to define a register and mark it as dirty
+pub fn define_rd_and_mark_dirty(
+    b: &mut FunctionBuilder<'_>,
+    regs: &[Variable; 32],
+    dirty_regs: &mut [bool; 32],
+    rd: Option<usize>,
+    r: Value,
+) {
+    let rd_idx = rd.unwrap();
+    b.def_var(regs[rd_idx], r);
+    dirty_regs[rd_idx] = true;
+    // println!("define_rd_and_mark_dirty def rd {} {:?}", regs[rd_idx], dirty_regs);
+}
+
+/// Helper function to load a register if needed and not dirty
+pub fn load_reg_if_needed_and_not_dirty(
+    b: &mut FunctionBuilder<'_>,
+    register_file_ptr: Value,
+    reg: usize,
+    regs_read_so_far: &mut [bool; 32],
+    regs_dirty: &mut [bool;32],
+    regs: &[Variable],
+) -> usize {
+    // println!("load_reg_if_needed_and_not_dirty try to load reg {}", reg);
+    if !regs_read_so_far[reg] && !regs_dirty[reg] {
+        // println!("load_reg_if_needed_and_not_dirty loading reg {}", reg);
+        load_register_from_cpu(b, register_file_ptr, reg, &regs[reg]);
+        regs_read_so_far[reg] = true;
+    }
+    reg
+}
+
+/// Helper function to load a register from CPU
+pub fn load_register_from_cpu(
+    b: &mut FunctionBuilder<'_>,
+    register_file_ptr: Value,
+    reg: usize,
+    reg_var: &Variable,
+) {
+    // TODO convention first comes regs array.
+    // println!("loading reg {} to {}", reg, reg_var);
+    let off = (reg * 4) as i64;
+    let addr = b.ins().iadd_imm(register_file_ptr, off);
+    let val = b.ins().load(types::I32, MemFlags::new(), addr, 0);
+    b.def_var(*reg_var, val);
+}
+
+/// Helper function to store registers to CPU
+pub fn store_registers_to_cpu(
+    b: &mut FunctionBuilder<'_>,
+    register_file_ptr: Value,
+    regs: &[Variable],
+    dirty_regs: &[bool],
+) {
+    // Only store registers that have been modified
+    for i in 0..32 {
+        // Skip registers that haven't been modified
+        if !dirty_regs[i] {
+            continue;
+        }
+        let reg_val = b.use_var(regs[i]);
+        println!("Register {}: retrieved value = {:?}", i, reg_val);
+        let off = (i * 4) as i64;
+
+        // Calculate pointer to CPU's regs[i]
+        let addr = b.ins().iadd_imm(register_file_ptr, off);
+
+        // Store the register value back to CPU memory
+        b.ins().store(MemFlags::new(), reg_val, addr, 0);
+        println!("Stored reg {} value back to CPU at offset {}", i, off);
     }
 }
