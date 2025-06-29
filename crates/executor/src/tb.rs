@@ -359,26 +359,27 @@ pub fn compile_tb<'a>(
 
             //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, unsigned_val);
             //     }
-            // Opcode::LW => {
-            //     let Instruction { op_a, op_b, op_c, .. } = inst;
+            Opcode::LW => {
+                // let (rd, rs1, imm) = instruction.i_type();
+                let Instruction { op_a, op_b, op_c, .. } = inst;
 
-            //     let reg_idx = op_b.try_into().unwrap();
-            //     let op_b = load_reg_if_needed_and_not_dirty(
-            //         &mut b,
-            //         register_file_ptr,
-            //         reg_idx,
-            //         &mut regs_read_or_changed_so_far,
-            //         &mut dirty_regs,
-            //         &regs,
-            //     );
+                let reg_idx = op_b.try_into().unwrap();
+                let op_b = load_reg_if_needed_and_not_dirty(
+                    &mut b,
+                    register_file_ptr,
+                    reg_idx,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    &regs,
+                );
 
-            //     let base = b.use_var(regs[op_b]);
-            //     let addr = b.ins().iadd_imm(base, op_c as i64);
+                let base = b.use_var(regs[op_b]);
+                let addr = b.ins().iadd_imm(base, op_c as i64);
 
-            //     let val = call_mem_load(jit, &mut b, memory_ptr, addr);
+                let val = call_mem_load(jit, &mut b, memory_ptr, addr);
 
-            //     define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, op_a, val);
-            // }
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, op_a, val);
+            }
             //     OpcodeKind::BaseI(BaseIOpcode::SB) => {
             //         let Instruction { rs2, rs1, imm, .. } = inst;
             //         let (rs1, rs2) = load_two_regs(
@@ -696,17 +697,17 @@ pub fn compile_tb<'a>(
             //         cnt += 1;
             //         break;
             //     }
-            //     OpcodeKind::BaseI(BaseIOpcode::AUIPC) => {
-            //         // Add Upper Immediate to PC
-            //         let Instruction { rd, imm, .. } = inst;
+            Opcode::AUIPC => {
+                // Add Upper Immediate to PC
+                let (rd, imm) = inst.u_type();
+                let rd = rd as u32;
+                let shifted_imm: i64 = imm.into();
+                let result = b
+                    .ins()
+                    .iconst(types::I32, (pc as i64) + (shifted_imm));
 
-            //         let shifted_imm = imm.expect("imm is None");
-            //         let result = b
-            //             .ins()
-            //             .iconst(types::I32, (pc as i64) + (shifted_imm as i64));
-
-            //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, result);
-            //     }
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, result);
+            }
             //     OpcodeKind::M(raki::MOpcode::MUL) => {
             //         let Instruction { rd, rs1, rs2, .. } = inst;
             //         let (rs1, rs2) = load_two_regs(
@@ -1288,7 +1289,6 @@ mod tests {
         //     let test_program = [
         //         0x13, 0x05, 0x00, 0x04,     // addi x10, x0, 0      # set x10 to address 0
         //         0x93, 0x0F, 0xA0, 0x02,     // addi x31, x0, 42     # set x31 to value 42
-        //         // 0x23, 0x20, 0xFF, 0x00,     // sw   x31, 0(x10)     # store 42 at address 0
         //         0x83, 0x2E, 0x05, 0x00,     // lw   x29, 0(x10)     # load from address 0 into x29
         //     ];
 
@@ -1302,6 +1302,31 @@ mod tests {
         //     assert_eq!(cpu.regs[10], 64, "Register x10 should be 64");
         //     assert_eq!(cpu.regs[29], 42, "Register x29 should be 42 (loaded from memory)");
         // }
+        #[test]
+        fn test_lw_instruction() {
+            // Program:
+            //   addi x10, x0, 0     # base address 0
+            //   addi x31, x0, 42    # value to store
+            //   lw   x29, 0(x10)    # load 42 from mem[0]
+            let instructions = vec![
+                Instruction::new(Opcode::ADD, 10, 0, 44, false, true),   // addi x10, x0, 0
+                Instruction::new(Opcode::ADD, 31, 0, 42, false, true),  // addi x31, x0, 42
+                Instruction::new(Opcode::LW, 29, 10, 0, false, true),   // lw x29, 0(x10)
+            ];
+
+            let program = Program::new(instructions, 0, 0);
+            let mut runtime = Executor::new(program);
+
+            runtime.state.memory_.store32(44, 42);
+            let (insns, next_pc) = setup_test_env_with_cpu(&mut runtime);
+    
+            // Verify the results
+            assert_eq!(insns, 3, "Should have translated 3 instructions");
+            assert_eq!(next_pc, 12, "Next PC should be 12 after execution");
+            assert_eq!(runtime.register(Register::X10), 44);
+            assert_eq!(runtime.register(Register::X31), 42);
+            assert_eq!(runtime.register(Register::X29), 42, "Register x29 should load the stored value");
+        }
 
     //     #[test]
     //     fn test_sw_instruction() {
@@ -1325,6 +1350,9 @@ mod tests {
     //         assert_eq!(cpu.regs[20], 123, "Register x20 should be 123");
     //         assert_eq!(cpu.mem[8], 123, "Register x28 should be 123 (loaded from memory)");
     //     }
+
+
+    
 
     //     #[test]
     //     fn test_jalr_instruction() {
