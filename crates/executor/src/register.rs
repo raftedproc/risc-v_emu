@@ -172,7 +172,7 @@ use cranelift_module::{FuncId, Linkage, Module};
 /// Helper function to load two registers if needed and not dirty
 pub fn load_two_regs(
     b: &mut FunctionBuilder<'_>,
-    cpu_ptr: Value,
+    register_file_ptr: Value,
     regs: &[Variable; 32],
     regs_read_so_far: &mut [bool; 32],
     regs_dirty: &mut [bool; 32],
@@ -181,8 +181,22 @@ pub fn load_two_regs(
 ) -> (usize, usize) {
     let rs1_as_ind: usize = rs1.try_into().unwrap();
     let rs2_as_ind: usize = rs2.try_into().unwrap();
-    let rs1 = load_reg_if_needed_and_not_dirty(b, cpu_ptr, rs1_as_ind, regs_read_so_far, regs_dirty, regs);
-    let rs2 = load_reg_if_needed_and_not_dirty(b, cpu_ptr, rs2_as_ind, regs_read_so_far, regs_dirty, regs);
+    let rs1 = load_reg_if_needed_and_not_dirty(
+        b,
+        register_file_ptr,
+        rs1_as_ind,
+        regs_read_so_far,
+        regs_dirty,
+        regs,
+    );
+    let rs2 = load_reg_if_needed_and_not_dirty(
+        b,
+        register_file_ptr,
+        rs2_as_ind,
+        regs_read_so_far,
+        regs_dirty,
+        regs,
+    );
     (rs1, rs2)
 }
 
