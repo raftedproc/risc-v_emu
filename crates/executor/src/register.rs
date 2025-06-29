@@ -128,17 +128,16 @@ impl Register {
     }
 }
 
-
 #[repr(C)]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 /// Register file
 pub struct RegisterFile {
     /// Array of registers
-    pub registers: [MemoryRecord; Register::number_of_registers()],
+    pub registers: [u32; Register::number_of_registers()],
 }
 
 impl Index<Register> for RegisterFile {
-    type Output = MemoryRecord;
+    type Output = u32;
 
     fn index(&self, index: Register) -> &Self::Output {
         &self.registers[index as usize]
@@ -151,18 +150,20 @@ impl IndexMut<Register> for RegisterFile {
     }
 }
 
-/// Register load helper 
+/// Register load helper
 pub extern "C" fn reg_store(registers: &mut RegisterFile, reg: u32, val: u32) {
-    registers.registers[reg as usize].value = val;
+    registers.registers[reg as usize] = val;
 }
 
-/// Register load helper 
+/// Register load helper
 pub extern "C" fn reg_load(registers: &mut RegisterFile, reg: u32) -> u32 {
-    registers.registers[reg as usize].value
+    registers.registers[reg as usize]
 }
 
-use cranelift_codegen::ir::{ExtFuncData, ExternalName, InstBuilder, MemFlags, Signature, UserExternalNameRef};
 use cranelift_codegen::ir::{types, AbiParam, Value};
+use cranelift_codegen::ir::{
+    ExtFuncData, ExternalName, InstBuilder, MemFlags, Signature, UserExternalNameRef,
+};
 use cranelift_frontend::FunctionBuilder;
 use cranelift_frontend::Variable;
 use cranelift_jit::JITModule;
@@ -174,12 +175,14 @@ pub fn load_two_regs(
     cpu_ptr: Value,
     regs: &[Variable; 32],
     regs_read_so_far: &mut [bool; 32],
-    regs_dirty: &mut [bool;32],
-    rs1: Option<usize>,
-    rs2: Option<usize>,
+    regs_dirty: &mut [bool; 32],
+    rs1: u32,
+    rs2: u32,
 ) -> (usize, usize) {
-    let rs1 = load_reg_if_needed_and_not_dirty(b, cpu_ptr, rs1.unwrap(), regs_read_so_far, regs_dirty, regs);
-    let rs2 = load_reg_if_needed_and_not_dirty(b, cpu_ptr, rs2.unwrap(), regs_read_so_far, regs_dirty, regs);
+    let rs1_as_ind: usize = rs1.try_into().unwrap();
+    let rs2_as_ind: usize = rs2.try_into().unwrap();
+    let rs1 = load_reg_if_needed_and_not_dirty(b, cpu_ptr, rs1_as_ind, regs_read_so_far, regs_dirty, regs);
+    let rs2 = load_reg_if_needed_and_not_dirty(b, cpu_ptr, rs2_as_ind, regs_read_so_far, regs_dirty, regs);
     (rs1, rs2)
 }
 
@@ -188,12 +191,13 @@ pub fn define_rd_and_mark_dirty(
     b: &mut FunctionBuilder<'_>,
     regs: &[Variable; 32],
     dirty_regs: &mut [bool; 32],
-    rd: Option<usize>,
+    rd: u32,
     r: Value,
 ) {
-    let rd_idx = rd.unwrap();
-    b.def_var(regs[rd_idx], r);
-    dirty_regs[rd_idx] = true;
+    // TODO impl Index for both arrays.
+    let rd_as_idx: usize = rd.try_into().unwrap();
+    b.def_var(regs[rd_as_idx], r);
+    dirty_regs[rd_as_idx] = true;
     // println!("define_rd_and_mark_dirty def rd {} {:?}", regs[rd_idx], dirty_regs);
 }
 
@@ -203,7 +207,7 @@ pub fn load_reg_if_needed_and_not_dirty(
     register_file_ptr: Value,
     reg: usize,
     regs_read_so_far: &mut [bool; 32],
-    regs_dirty: &mut [bool;32],
+    regs_dirty: &mut [bool; 32],
     regs: &[Variable],
 ) -> usize {
     // println!("load_reg_if_needed_and_not_dirty try to load reg {}", reg);

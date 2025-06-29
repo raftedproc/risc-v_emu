@@ -235,7 +235,7 @@ impl<'a> Executor<'a> {
         let mut registers = [0; 32];
         for i in 0..Register::number_of_registers() {
             let register = Register::from_u32(i as u32);
-            registers[i] = self.state.register_file[register].value;
+            registers[i] = self.state.register_file[register];
         }
         registers
     }
@@ -243,7 +243,7 @@ impl<'a> Executor<'a> {
     /// Get the current value of a register.
     #[must_use]
     pub fn register(&mut self, register: Register) -> u32 {
-        self.state.register_file[register].value
+        self.state.register_file[register]
     }
 
     /// Store a value into a register.
@@ -253,12 +253,12 @@ impl<'a> Executor<'a> {
         value: u32,
         position: MemoryAccessPosition,
     ) {
-        let memory_record = MemoryRecord {
-            value,
-            shard: self.shard(),
-            timestamp: self.timestamp(&position),
-        };
-        self.state.register_file[register] = memory_record;
+        // let memory_record = MemoryRecord {
+        //     value,
+        //     shard: self.shard(),
+        //     timestamp: self.timestamp(&position),
+        // };
+        self.state.register_file[register] = value;
     }
 
     /// Get the current value of a word.
@@ -616,6 +616,13 @@ impl<'a> Executor<'a> {
     #[inline]
     pub fn fetch(&self) -> Instruction {
         let idx = ((self.state.pc - self.program.pc_base) / 4) as usize;
+        self.program.instructions[idx]
+    }
+
+    /// Fetch the instruction at the given program counter.
+    #[inline]
+    pub fn fetch_at(&self, pc: u32) -> Instruction {
+        let idx = ((pc - self.program.pc_base) / 4) as usize;
         self.program.instructions[idx]
     }
 
@@ -1228,12 +1235,14 @@ impl<'a> Executor<'a> {
         loop {
             let mode = self.tb_find_or_compile(&mut fast_tb_cache, &mut slow_tb_cache, &mut jit_wrapper);
             if let ExecutionMode::TB(tb) = mode {
+                // println!("executing tb");
                 unsafe {
                     let tb_executor: extern "C" fn(*mut Memory, *mut RegisterFile) -> u32 =
                         std::mem::transmute(tb);
                     tb_executor(&mut self.state.memory_, &mut self.state.register_file);
                 }
             } else {
+                // println!("executing cycle");
                 if self.execute_cycle(done_inv, &mut rng)? {
                     done = true;
                     break;

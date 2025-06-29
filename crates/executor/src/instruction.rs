@@ -109,6 +109,12 @@ impl Instruction {
     pub const fn is_jump_instruction(&self) -> bool {
         matches!(self.opcode, Opcode::JAL | Opcode::JALR)
     }
+
+    /// Returns if the instruction is an addi instruction.
+    #[must_use]
+    pub const fn is_addi_instruction(&self) -> bool {
+        !self.imm_b && self.imm_c && self.op_b == 0
+    }
 }
 
 impl Debug for Instruction {
