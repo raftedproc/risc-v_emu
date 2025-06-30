@@ -1,6 +1,6 @@
 use std::ptr::null;
 
-use crate::{store_registers_to_cpu, Opcode};
+use crate::{memory::call_mem_store, store_registers_to_cpu, Opcode};
 use cranelift_codegen::ir::{condcodes::IntCC, *};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::JITModule;
@@ -69,36 +69,46 @@ pub fn compile_tb<'a>(
         println!("{:?}", inst);
         match inst.opcode {
             Opcode::ADD => {
-                let Instruction {
-                    op_a, op_b, op_c, ..
-                } = inst;
-                if inst.is_addi_instruction() {
-                    compile_addi(
-                        &mut b,
-                        register_file_ptr,
-                        &mut regs_read_or_changed_so_far,
-                        &mut dirty_regs,
-                        &regs,
-                        op_b,
-                        op_c,
-                        op_a,
-                    );
-                    println!("processing ADDI dirty {:?}", dirty_regs);
-                } else {
+                if !inst.has_imm_c() {
+                    let (rd, rs1, rs2) = inst.r_type();
                     let (v1, v2) = preload_for_bin_op(
                         &mut b,
                         register_file_ptr,
                         &mut regs_read_or_changed_so_far,
                         &mut dirty_regs,
                         &regs,
-                        op_b,
-                        op_c,
+                        rs1 as u32,
+                        rs2 as u32,
                     );
 
                     let v = b.ins().iadd(v1, v2);
 
-                    define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, op_a, v);
+                    define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, v);
                     println!("ADD dirty {:?}", dirty_regs);
+                } else if inst.is_addi_instruction() {
+                    let (rd, rs1, imm) = inst.i_type();
+                    compile_addi(
+                        &mut b,
+                        register_file_ptr,
+                        &mut regs_read_or_changed_so_far,
+                        &mut dirty_regs,
+                        &regs,
+                        rs1 as u32,
+                        imm,
+                        rd as u32,
+                    );
+                    println!("processing ADDI dirty {:?}", dirty_regs);
+                } else {
+                    // TODO see alu_rr else branch
+                    // assert!(inst.imm_b && inst.imm_c); // TODO
+                    // let Instruction {
+                    //     op_a, op_b, op_c, ..
+                    // } = inst;
+
+                    // let v = b.ins().iadd(v1, v2);
+
+                    // define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, op_a, v);
+                    // println!("ADD dirty {:?}", dirty_regs);
                 }
             }
             Opcode::SUB => {
@@ -263,107 +273,10 @@ pub fn compile_tb<'a>(
 
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, op_a, v);
             }
-            // Opcode::LB => {
-            //     let Instruction { op_a, op_b, op_c, .. } = inst;
-            //     let reg_idx = op_b.try_into().unwrap();
-            //     let op_b = load_reg_if_needed_and_not_dirty(
-            //         &mut b,
-            //         register_file_ptr,
-            //         reg_idx,
-            //         &mut regs_read_or_changed_so_far,
-            //         &mut dirty_regs,
-            //         &regs,
-            //     );
-
-            //     let base = b.use_var(regs[op_b]);
-            //     let imm = op_c as i64;
-            //     let addr = b.ins().iadd_imm(base, imm);
-
-            //     // Call load32 (we don't have separate load8)
-            //     let val = call_mem_load(jit, &mut b, memory_ptr, addr);
-
-            //     // Extract the byte and sign-extend it to 32 bits
-            //     let shift_amount = b.ins().iconst(types::I32, 24);
-            //     let byte_val = b.ins().ishl(val, shift_amount);
-            //     let signed_val = b.ins().sshr(byte_val, shift_amount);
-
-            //     define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, op_a, signed_val);
-            // }
-            //     OpcodeKind::BaseI(BaseIOpcode::LH) => {
-            //         let Instruction { rd, rs1, imm, .. } = inst;
-            //         let rs1 = load_reg_if_needed_and_not_dirty(
-            //             &mut b,
-            //             cpu_ptr,
-            //             rs1.unwrap(),
-            //             &mut regs_read_or_changed_so_far,
-            //             &mut dirty_regs,
-            //             &regs,
-            //         );
-
-            //         let base = b.use_var(regs[rs1]);
-            //         let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
-
-            //         // Call load32 (we don't have separate load16)
-            //         let val = call_mem_load(jit, &mut b, cpu_ptr, addr);
-
-            //         // Extract the halfword and sign-extend it to 32 bits
-            //         let shift_amount = b.ins().iconst(types::I32, 16);
-            //         let hw_val = b.ins().ishl(val, shift_amount);
-            //         let signed_val = b.ins().sshr(hw_val, shift_amount);
-
-            //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, signed_val);
-            //     }
-            //     OpcodeKind::BaseI(BaseIOpcode::LBU) => {
-            //         let Instruction { rd, rs1, imm, .. } = inst;
-            //         let rs1 = load_reg_if_needed_and_not_dirty(
-            //             &mut b,
-            //             cpu_ptr,
-            //             rs1.unwrap(),
-            //             &mut regs_read_or_changed_so_far,
-            //             &mut dirty_regs,
-            //             &regs,
-            //         );
-
-            //         let base = b.use_var(regs[rs1]);
-            //         let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
-
-            //         // Call load32 (we don't have separate load8)
-            //         let val = call_mem_load(jit, &mut b, cpu_ptr, addr);
-
-            //         // Extract the byte (unsigned)
-            //         let mask = b.ins().iconst(types::I32, 0xFF);
-            //         let unsigned_val = b.ins().band(val, mask);
-
-            //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, unsigned_val);
-            //     }
-            //     OpcodeKind::BaseI(BaseIOpcode::LHU) => {
-            //         let Instruction { rd, rs1, imm, .. } = inst;
-            //         let rs1 = load_reg_if_needed_and_not_dirty(
-            //             &mut b,
-            //             cpu_ptr,
-            //             rs1.unwrap(),
-            //             &mut regs_read_or_changed_so_far,
-            //             &mut dirty_regs,
-            //             &regs,
-            //         );
-
-            //         let base = b.use_var(regs[rs1]);
-            //         let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
-
-            //         // Call load32 (we don't have separate load16)
-            //         let val = call_mem_load(jit, &mut b, cpu_ptr, addr);
-
-            //         // Extract the halfword (unsigned)
-            //         let mask = b.ins().iconst(types::I32, 0xFFFF);
-            //         let unsigned_val = b.ins().band(val, mask);
-
-            //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, unsigned_val);
-            //     }
-            Opcode::LW => {
-                // let (rd, rs1, imm) = instruction.i_type();
-                let Instruction { op_a, op_b, op_c, .. } = inst;
-
-                let reg_idx = op_b.try_into().unwrap();
+            Opcode::LB => {
+                // let Instruction { op_a, op_b, op_c, .. } = inst;
+                let (rd, rs1, imm) = inst.i_type();
+                let reg_idx = rs1 as usize;
                 let op_b = load_reg_if_needed_and_not_dirty(
                     &mut b,
                     register_file_ptr,
@@ -374,82 +287,214 @@ pub fn compile_tb<'a>(
                 );
 
                 let base = b.use_var(regs[op_b]);
-                let addr = b.ins().iadd_imm(base, op_c as i64);
+                let imm = imm as i64;
+                let addr = b.ins().iadd_imm(base, imm);
+
+                // Call load32 (we don't have separate load8)
+                let val = call_mem_load(jit, &mut b, memory_ptr, addr);
+
+                // Extract the byte and sign-extend it to 32 bits
+                let shift_amount = b.ins().iconst(types::I32, 24);
+                let byte_val = b.ins().ishl(val, shift_amount);
+                let signed_val = b.ins().sshr(byte_val, shift_amount);
+
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, signed_val);
+            }
+            Opcode::LBU => {
+                let (rd, rs1, imm) = inst.i_type();
+                let rs1 = load_reg_if_needed_and_not_dirty(
+                    &mut b,
+                    register_file_ptr,
+                    rs1 as usize,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    &regs,
+                );
+
+                let base = b.use_var(regs[rs1]);
+                let imm = imm as i64;
+                let addr = b.ins().iadd_imm(base, imm);
+
+                // Call load32 (we don't have separate load8)
+                let val = call_mem_load(jit, &mut b, memory_ptr, addr);
+
+                // Extract the byte (unsigned)
+                let mask = b.ins().iconst(types::I32, 0xFF);
+                let unsigned_val = b.ins().band(val, mask);
+
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, unsigned_val);
+            }
+            Opcode::LH => {
+                let (rd, rs1, imm) = inst.i_type();
+                let rs1 = load_reg_if_needed_and_not_dirty(
+                    &mut b,
+                    register_file_ptr,
+                    rs1 as usize,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    &regs,
+                );
+
+                let base = b.use_var(regs[rs1]);
+                let imm = imm as i64;
+                let addr = b.ins().iadd_imm(base, imm);
+
+                // Call load32 (we don't have separate load16)
+                let val = call_mem_load(jit, &mut b, memory_ptr, addr);
+
+                // Extract the halfword and sign-extend it to 32 bits
+                let shift_amount = b.ins().iconst(types::I32, 16);
+                let hw_val = b.ins().ishl(val, shift_amount);
+                let signed_val = b.ins().sshr(hw_val, shift_amount);
+
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, signed_val);
+            }
+            Opcode::LHU => {
+                let (rd, rs1, imm) = inst.i_type();
+                let rs1 = load_reg_if_needed_and_not_dirty(
+                    &mut b,
+                    register_file_ptr,
+                    rs1 as usize,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    &regs,
+                );
+
+                let base = b.use_var(regs[rs1]);
+                let imm = imm as i64;
+                let addr = b.ins().iadd_imm(base, imm);
+
+                // Call load32 (we don't have separate load16)
+                let val = call_mem_load(jit, &mut b, memory_ptr, addr);
+
+                // Extract the halfword (unsigned)
+                let mask = b.ins().iconst(types::I32, 0xFFFF);
+                let unsigned_val = b.ins().band(val, mask);
+
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, unsigned_val);
+            }
+            Opcode::LW => {
+                let (rd, rs1, imm) = inst.i_type();
+                let rs1 = load_reg_if_needed_and_not_dirty(
+                    &mut b,
+                    register_file_ptr,
+                    rs1 as usize,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    &regs,
+                );
+
+                let base = b.use_var(regs[rs1]);
+                let addr = b.ins().iadd_imm(base, imm as i64);
 
                 let val = call_mem_load(jit, &mut b, memory_ptr, addr);
 
-                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, op_a, val);
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, val);
             }
-            //     OpcodeKind::BaseI(BaseIOpcode::SB) => {
-            //         let Instruction { rs2, rs1, imm, .. } = inst;
-            //         let (rs1, rs2) = load_two_regs(
-            //             &mut b,
-            //             cpu_ptr,
-            //             &regs,
-            //             &mut regs_read_or_changed_so_far,
-            //             &mut dirty_regs,
-            //             rs1,
-            //             rs2,
-            //         );
+            Opcode::SB => {
+                let (rs1, rs2, imm) = inst.s_type();
+                // let Instruction { rs2, rs1, imm, .. } = inst;
+                let (rs1, rs2) = load_two_regs(
+                    &mut b,
+                    register_file_ptr,
+                    &regs,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    rs1 as u32,
+                    rs2 as u32,
+                );
 
-            //         let base = b.use_var(regs[rs1]);
-            //         let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
-            //         let val = b.use_var(regs[rs2]);
+                let base = b.use_var(regs[rs1]);
+                let imm = imm as i64;
+                let addr = b.ins().iadd_imm(base, imm);
+                let val = b.use_var(regs[rs2]);
 
-            //         call_mem_store(jit, &mut b, cpu_ptr, addr, val);
-            //     }
-            //     OpcodeKind::BaseI(BaseIOpcode::SH) => {
-            //         let Instruction { rs2, rs1, imm, .. } = inst;
-            //         let (rs1, rs2) = load_two_regs(
-            //             &mut b,
-            //             cpu_ptr,
-            //             &regs,
-            //             &mut regs_read_or_changed_so_far,
-            //             &mut dirty_regs,
-            //             rs1,
-            //             rs2,
-            //         );
+                call_mem_store(jit, &mut b, memory_ptr, addr, val);
+            }
+            Opcode::SH => {
+                let (rs1, rs2, imm) = inst.s_type();
+                let (rs1, rs2) = load_two_regs(
+                    &mut b,
+                    register_file_ptr,
+                    &regs,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    rs1 as u32,
+                    rs2 as u32,
+                );
 
-            //         let base = b.use_var(regs[rs1]);
-            //         let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
-            //         let val = b.use_var(regs[rs2]);
+                let base = b.use_var(regs[rs1]);
+                let addr = b.ins().iadd_imm(base, imm as i64);
+                let val = b.use_var(regs[rs2]);
 
-            //         call_mem_store(jit, &mut b, cpu_ptr, addr, val);
-            //     }
-            //     OpcodeKind::BaseI(BaseIOpcode::SW) => {
-            //         let Instruction { rs2, rs1, imm, .. } = inst;
-            //         let (rs1, rs2) = load_two_regs(
-            //             &mut b,
-            //             cpu_ptr,
-            //             &regs,
-            //             &mut regs_read_or_changed_so_far,
-            //             &mut dirty_regs,
-            //             rs1,
-            //             rs2,
-            //         );
+                call_mem_store(jit, &mut b, memory_ptr, addr, val);
+            }
+            Opcode::SW => {
+                let (rs1, rs2, imm) = inst.s_type();
+                let (rs1, rs2) = load_two_regs(
+                    &mut b,
+                    register_file_ptr,
+                    &regs,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    rs1 as u32,
+                    rs2 as u32,
+                );
 
-            //         let base = b.use_var(regs[rs1]);
-            //         let addr = b.ins().iadd_imm(base, imm.unwrap() as i64);
-            //         let val = b.use_var(regs[rs2]);
+                let base = b.use_var(regs[rs1]);
+                let imm = imm as i64;
+                let addr = b.ins().iadd_imm(base, imm);
+                let val = b.use_var(regs[rs2]);
 
-            //         call_mem_store(jit, &mut b, cpu_ptr, addr, val);
-            //     }
-            //     OpcodeKind::BaseI(BaseIOpcode::JALR) => {
-            //         let Instruction { rd, rs1, imm, .. } = inst;
-            //         let target = b.use_var(regs[rs1.unwrap()]);
-            //         let next = b.ins().iadd_imm(target, imm.unwrap() as i64);
-            //         let const_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
-            //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, const_pc);
+                call_mem_store(jit, &mut b, memory_ptr, addr, val);
+            }
+            // Opcode::JAL => {
+            //     // Jump and link - terminal instruction
+            //     let (rd, imm) = inst.j_type();
 
-            //         // quit early after J-instruction
-            //         store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
+            //     // Store return address (PC+4) in rd
+            //     let return_addr = b.ins().iconst(types::I32, (pc + 4) as i64);
+            //     define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, return_addr);
 
-            //         b.ins().return_(&[next]);
-            //         term_was_added = true;
-            //         cnt += 1;
+            //     // Calculate target address
+            //     let imm = imm as i64;
+            //     let target_pc = b
+            //         .ins()
+            //         .iconst(types::I32, (pc as i64) + imm);
 
-            //         break;
-            //     }
+            //     // Terminate the current translation block and jump to target
+            //     store_registers_to_cpu(&mut b, register_file_ptr, &regs, &dirty_regs);
+            //     b.ins().return_(&[target_pc]);
+            //     term_was_added = true;
+            //     cnt += 1;
+            //     break;
+            // }
+            // Opcode::JALR => {
+            //     let (rd, rs1, imm) = inst.i_type();
+            //     let rs1 = load_reg_if_needed_and_not_dirty(
+            //         &mut b,
+            //         register_file_ptr,
+            //         rs1 as usize,
+            //         &mut regs_read_or_changed_so_far,
+            //         &mut dirty_regs,
+            //         &regs,
+            //     );
+
+            //     let target = b.use_var(regs[rs1]);
+            //     let imm = imm as i64;
+            //     let next = b.ins().iadd_imm(target, imm);
+            //     let const_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
+            //     define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, const_pc);
+
+            //     // quit early after J-instruction
+            //     store_registers_to_cpu(&mut b, register_file_ptr, &regs, &dirty_regs);
+
+            //     b.ins().return_(&[next]);
+            //     term_was_added = true;
+            //     cnt += 1;
+
+            //     break;
+            // }
             //     OpcodeKind::BaseI(BaseIOpcode::BEQ) => {
             //         // Branch if equal - terminal instruction
             //         let Instruction { rs1, rs2, imm, .. } = inst;
@@ -677,26 +722,7 @@ pub fn compile_tb<'a>(
             //         cnt += 1;
             //         break;
             //     }
-            //     OpcodeKind::BaseI(BaseIOpcode::JAL) => {
-            //         // Jump and link - terminal instruction
-            //         let Instruction { rd, imm, .. } = inst;
-
-            //         // Store return address (PC+4) in rd
-            //         let return_addr = b.ins().iconst(types::I32, (pc + 4) as i64);
-            //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, return_addr);
-
-            //         // Calculate target address
-            //         let target_pc = b
-            //             .ins()
-            //             .iconst(types::I32, (pc as i64) + (imm.unwrap() as i64));
-
-            //         // Terminate the current translation block and jump to target
-            //         store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
-            //         b.ins().return_(&[target_pc]);
-            //         term_was_added = true;
-            //         cnt += 1;
-            //         break;
-            //     }
+           
             Opcode::AUIPC => {
                 // Add Upper Immediate to PC
                 let (rd, imm) = inst.u_type();
@@ -1007,21 +1033,21 @@ fn preload_for_bin_op(
     regs_read_or_changed_so_far: &mut [bool; 32],
     dirty_regs: &mut [bool; 32],
     regs: &[Variable; 32],
-    op_b: u32,
-    op_c: u32,
+    rs1: u32,
+    rs2: u32,
 ) -> (Value, Value) {
-    let (op_b, op_c) = load_two_regs(
+    let (rs1, rs2) = load_two_regs(
         b,
         register_file_ptr,
         &regs,
         regs_read_or_changed_so_far,
         dirty_regs,
-        op_b,
-        op_c,
+        rs1,
+        rs2,
     );
 
-    let v1 = b.use_var(regs[op_b]);
-    let v2 = b.use_var(regs[op_c]);
+    let v1 = b.use_var(regs[rs1]);
+    let v2 = b.use_var(regs[rs2]);
     (v1, v2)
 }
 
@@ -1279,29 +1305,6 @@ mod tests {
             assert_eq!(next_pc, 12);
         }
 
-        // #[test]
-        // fn test_lw_instruction() {
-        //     // Define a simple program with LW instruction
-        //     // This program will:
-        //     // 1. Set x10 to an address (0)
-        //     // 2. Store the value 42 at memory address (0)
-        //     // 3. Load from that address into x28
-        //     let test_program = [
-        //         0x13, 0x05, 0x00, 0x04,     // addi x10, x0, 0      # set x10 to address 0
-        //         0x93, 0x0F, 0xA0, 0x02,     // addi x31, x0, 42     # set x31 to value 42
-        //         0x83, 0x2E, 0x05, 0x00,     // lw   x29, 0(x10)     # load from address 0 into x29
-        //     ];
-
-        //     let mut cpu = Cpu::new(&test_program);
-        //     cpu.mem[64] = 42;
-        //     let (cpu, _, insns, next_pc) = setup_test_env_with_cpu(&test_program, cpu);
-
-        //     // Verify the results
-        //     assert_eq!(insns, 3, "Should have translated all 4 instructions");
-        //     assert_eq!(next_pc, 12, "PC should be 16 after execution");
-        //     assert_eq!(cpu.regs[10], 64, "Register x10 should be 64");
-        //     assert_eq!(cpu.regs[29], 42, "Register x29 should be 42 (loaded from memory)");
-        // }
         #[test]
         fn test_lw_instruction() {
             // Program:
@@ -1328,62 +1331,189 @@ mod tests {
             assert_eq!(runtime.register(Register::X29), 42, "Register x29 should load the stored value");
         }
 
-    //     #[test]
-    //     fn test_sw_instruction() {
-    //         // Define a simple program with SW instruction
-    //         // This program will:
-    //         // 1. Set x10 to an address (4)
-    //         // 2. Set x20 to a value (123)
-    //         // 3. Store x20 to the address in x10 + 4
-    //         let test_program = [
-    //             0x13, 0x05, 0x40, 0x00,     // addi x10, x0, 4      # set x10 to address 4
-    //             0x13, 0x0A, 0xB0, 0x07,     // addi x20, x0, 123    # set x20 to value 123
-    //             0x23, 0x22, 0x45, 0x01,     // sw   x20, 4(x10)     # store 123 at address 8
-    //         ];
+        #[test]
+        fn test_byte_load_store_instructions() {
+            // main:
+            //     addi x10, x0, 1024      # base address in x10
+            //     addi x20, x0, 0xFF      # value to store (0xFF)
+            //     sb   x20, 0(x10)        # store byte
+            //     lb   x21, 0(x10)        # load signed byte
+            //     lbu  x22, 0(x10)        # load unsigned byte
+            let instructions = vec![
+                // addi x10, x0, 1024
+                Instruction::new(Opcode::ADD, 10, 0, 1024, false, true),
+                // addi x20, x0, 0xFF
+                Instruction::new(Opcode::ADD, 20, 0, 0xFF, false, true),
+                // sb x20, 0(x10)
+                Instruction::new(Opcode::SB, 10, 20, 0, false, true),
+                // lb x21, 0(x10)
+                Instruction::new(Opcode::LB, 21, 10, 0, false, true),
+                // lbu x22, 0(x10)
+                Instruction::new(Opcode::LBU, 22, 10, 0, false, true),
+            ];
 
-    //         let (cpu, _, insns, next_pc) = setup_test_env(&test_program);
+            let program = Program::new(instructions, 0, 0);
+            let mut runtime = Executor::new(program);
+            let (insns, next_pc) = setup_test_env_with_cpu(&mut runtime);
 
-    //         // Verify the results
-    //         assert_eq!(insns, 3, "Should have translated all 3 instructions");
-    //         assert_eq!(next_pc, 12, "PC should be 12 after execution");
-    //         assert_eq!(cpu.regs[10], 4, "Register x10 should be 4");
-    //         assert_eq!(cpu.regs[20], 123, "Register x20 should be 123");
-    //         assert_eq!(cpu.mem[8], 123, "Register x28 should be 123 (loaded from memory)");
-    //     }
+            // Verify the results:
+            // 0xFF as signed byte is -1 when sign-extended to 32 bits
+            // 0xFF as unsigned byte is 255
+            assert_eq!(insns, 5, "Should have translated all 5 instructions");
+            assert_eq!(next_pc, 20, "Next PC should be 20 after execution");
 
+            // x10 should hold the base address 1024
+            assert_eq!(runtime.register(Register::X10), 1024);
+            // Memory at 1024 should contain 0xFF (lowest byte of the word)
+            assert_eq!(runtime.state.memory_.load32(1024), 0xFF);
+            // x20's low byte is 0xFF
+            assert_eq!(runtime.register(Register::X20) & 0xFF, 0xFF);
+            // LB sign-extends 0xFF -> -1
+            assert_eq!(runtime.register(Register::X21) as i32, -1);
+            // LBU zero-extends 0xFF -> 255
+            assert_eq!(runtime.register(Register::X22), 0xFF);
+        }
 
-    
+        #[test]
+        fn test_halfword_load_store_instructions() {
+            // main:
+            //     addi x10, x0, 1024     # base address
+            //     addi x20, x0, 0xFFFF   # value to store (0xFFFF = -1)
+            //     sh   x20, 0(x10)       # store half-word
+            //     lh   x21, 0(x10)       # load signed half-word
+            //     lhu  x22, 0(x10)       # load unsigned half-word
+            let instructions = vec![
+                Instruction::new(Opcode::ADD, 10, 0, 1024, false, true),  // addi x10, x0, 1024
+                Instruction::new(Opcode::ADD, 20, 0, 0xFFFF, false, true), // addi x20, x0, 0xFFFF (-1)
+                Instruction::new(Opcode::SH, 10, 20, 0, false, true),     // sh x20, 0(x10)
+                Instruction::new(Opcode::LH, 21, 10, 0, false, true),     // lh x21, 0(x10)
+                Instruction::new(Opcode::LHU, 22, 10, 0, false, true),    // lhu x22, 0(x10)
+            ];
 
-    //     #[test]
-    //     fn test_jalr_instruction() {
-    //         // Define a simple program with JALR instruction
-    //         // This program will:
-    //         // 1. Set x10 to an address (20)
-    //         // 2. Jump to that address and link the return address to x1
-    //         // We expect the TB to end at the JALR, so we'll check the next_pc value
-    //         // Additionally, x1 should contain the return address (PC+4)
-    //         let test_program = [
-    //             0x13, 0x05, 0x40, 0x01,     // addi x10, x0, 20     # set x10 to address 20
-    //             0x67, 0x00, 0x05, 0x00,     // jalr x1, 0(x10)      # jump to address in x10
-    //             // The following should not be executed:
-    //             0x13, 0x0F, 0x10, 0x00,     // addi x30, x0, 1      # set x30 to 1
-    //         ];
+            let program = Program::new(instructions, 0, 0);
+            let mut runtime = Executor::new(program);
+            let (insns, next_pc) = setup_test_env_with_cpu(&mut runtime);
 
-    //         let (cpu, _, insns, next_pc) = setup_test_env(&test_program);
+            // Verify results
+            assert_eq!(insns, 5);
+            assert_eq!(next_pc, 20);
+            assert_eq!(runtime.register(Register::X10), 1024);
+            assert_eq!(runtime.state.memory_.load32(1024), 0xFFFF);
+            assert_eq!(runtime.register(Register::X20) & 0xFFFF, 0xFFFF);
+            assert_eq!(runtime.register(Register::X21) as i32, -1);
+            assert_eq!(runtime.register(Register::X22), 0xFFFF);
+        }
 
-    //         println!("next_pc {}", next_pc);
-    //         // Verify the results
-    //         assert_eq!(insns, 2, "Should have translated 2 instructions (until JALR)");
-    //         assert_eq!(next_pc, 20, "PC should be 20 after execution (jumped to x10)");
-    //         assert_eq!(cpu.regs[10], 20, "Register x10 should be 20");
-    //         assert_eq!(cpu.regs[0], 8, "Register x1 should be 8 (return address: PC+4)");
-    //         assert_eq!(cpu.regs[30], 0, "Register x30 should be 0 (instruction after JALR not executed)");
-    //     }
+        #[test]
+        fn test_sw_instruction() {
+            // main:
+            //     addi x10, x0, 4      # base address 4
+            //     addi x20, x0, 123    # value 123
+            //     sw   x20, 4(x10)     # store word at address 8
+            let instructions = vec![
+                Instruction::new(Opcode::ADD, 10, 0, 4, false, true),      // addi x10, x0, 4
+                Instruction::new(Opcode::ADD, 20, 0, 123, false, true),    // addi x20, x0, 123
+                Instruction::new(Opcode::SW, 10, 20, 4, false, true),      // sw x20, 4(x10)
+            ];
 
-    //     #[test]
-    //     fn test_mul_instruction() {
-    //         // Define a simple program with MUL instruction
-    //         let test_program = [
+            let program = Program::new(instructions, 0, 0);
+            let mut runtime = Executor::new(program);
+            let (insns, next_pc) = setup_test_env_with_cpu(&mut runtime);
+
+            assert_eq!(insns, 3);
+            assert_eq!(next_pc, 12);
+            assert_eq!(runtime.register(Register::X10), 4);
+            assert_eq!(runtime.register(Register::X20), 123);
+            assert_eq!(runtime.state.memory_.load32(8), 123);
+        }
+        // #[test]
+        // fn test_jal_instruction() {
+        //     // Program:
+        //     //   jal  x0, 8       # jump ahead by 8 bytes (skip next inst)
+        //     //   addi x30, x0, 123  (should be skipped)
+        //     //   addi x31, x0, 42   (would execute after branch target)
+        //     let instructions = vec![
+        //         Instruction::new(Opcode::JAL, 0, 0, 8, false, true),     // jal x0, 8
+        //         Instruction::new(Opcode::ADD, 30, 0, 123, false, true),  // addi x30, x0, 123
+        //         Instruction::new(Opcode::ADD, 31, 0, 42, false, true),   // addi x31, x0, 42
+        //     ];
+
+        //     let program = Program::new(instructions, 0, 0);
+        //     let mut runtime = Executor::new(program);
+        //     let (insns, next_pc) = setup_test_env_with_cpu(&mut runtime);
+
+        //     assert_eq!(insns, 1);
+        //     assert_eq!(runtime.register(Register::X30), 0);
+        //     assert_eq!(runtime.register(Register::X31), 0);
+        //     assert_eq!(next_pc, 8);
+        // }
+
+        // #[test]
+        // fn test_jal_with_link_instruction() {
+        //     // Program:
+        //     //   jal  x1, 8        # jump ahead by 8 and store return addr in x1
+        //     //   addi x30, x0, 123 # skipped
+        //     //   addi x31, x0, 42  # branch target
+        //     let instructions = vec![
+        //         Instruction::new(Opcode::JAL, 1, 0, 8, false, true),     // jal x1, 8
+        //         Instruction::new(Opcode::ADD, 30, 0, 123, false, true),  // addi x30, x0, 123
+        //         Instruction::new(Opcode::ADD, 31, 0, 42, false, true),   // addi x31, x0, 42
+        //     ];
+
+        //     let program = Program::new(instructions, 0, 0);
+        //     let mut runtime = Executor::new(program);
+        //     let (insns, next_pc) = setup_test_env_with_cpu(&mut runtime);
+
+        //     assert_eq!(insns, 1);
+        //     assert_eq!(runtime.register(Register::X1), 4);   // return address PC+4
+        //     assert_eq!(runtime.register(Register::X30), 0);
+        //     assert_eq!(next_pc, 8);
+        // }
+
+        // #[test]
+        // fn test_auipc_instruction() {
+        //     // Program:
+        //     //   auipc x10, 1   # x10 = PC + 1<<12 = 4096
+        //     //   addi  x20, x0, 0  # dummy instruction
+        //     let instructions = vec![
+        //         Instruction::new(Opcode::AUIPC, 10, 1, 0, true, false),  // auipc x10, 1
+        //         Instruction::new(Opcode::ADD, 20, 0, 0, false, true),    // addi x20, x0, 0
+        //     ];
+
+        //     let program = Program::new(instructions, 0, 0);
+        //     let mut runtime = Executor::new(program);
+        //     let (insns, next_pc) = setup_test_env_with_cpu(&mut runtime);
+
+        //     assert_eq!(insns, 2, "Should have translated all 2 instructions");
+        //     assert_eq!(runtime.register(Register::X10), 4096);
+        //     assert_eq!(runtime.register(Register::X20), 0);
+        //     assert_eq!(next_pc, 8);
+        // }
+
+        // #[test]
+        // fn test_jalr_instruction() {
+        //     // Program:
+        //     //   addi x10, x0, 20   # load jump target 20
+        //     //   jalr x1, 0(x10)    # jump to x10, link return addr into x1
+        //     //   addi x30, x0, 1    # should be skipped
+        //     let instructions = vec![
+        //         Instruction::new(Opcode::ADD, 10, 0, 20, false, true),   // addi x10, x0, 20
+        //         Instruction::new(Opcode::JALR, 1, 10, 0, false, true),   // jalr x1, 0(x10)
+        //         Instruction::new(Opcode::ADD, 30, 0, 1, false, true),    // addi x30, x0, 1
+        //     ];
+
+        //     let program = Program::new(instructions, 0, 0);
+        //     let mut runtime = Executor::new(program);
+        //     let (insns, next_pc) = setup_test_env_with_cpu(&mut runtime);
+
+        //     assert_eq!(insns, 2, "Should have translated all 2 instructions");
+        //     assert_eq!(next_pc, 20, "Next PC should be 20 after execution");
+        //     assert_eq!(runtime.register(Register::X10), 20);
+        //     assert_eq!(runtime.register(Register::X1), 8);   // return address PC+4
+        //     assert_eq!(runtime.register(Register::X30), 0);
+        // }
+
+        // ... rest of the code remains the same ...
     //             0x13, 0x05, 0x70, 0x00,     // addi x10, x0, 7      # set x10 to 7
     //             0x13, 0x0a, 0x40, 0x00,     // addi x20, x0, 4      # set x20 to 4
     //             0x33, 0x0e, 0x45, 0x03,     // mul  x28, x10, x20   # x28 = x10 * x20
@@ -1561,125 +1691,8 @@ mod tests {
     //         assert_eq!(next_pc, 20, "Next PC should be 20 after branch");
     //     }
 
-    //     #[test]
-    //     fn test_jal_instruction() {
-    //         // Define a program with JAL instruction
-    //         // 1. JAL to skip over the next instruction (PC+8)
-    //         // 2. Set x30 to 123 (should be skipped)
-    //         // 3. Set x31 to 42 (should execute)
-    //         let test_program = [
-    //             0x6f, 0x00, 0x80, 0x00,     // jal x0, 8 (jump to PC+8)
-    //             0x13, 0x0f, 0xb0, 0x07,     // addi x30, x0, 123 (should be skipped)
-    //             0x13, 0x0f, 0xa0, 0x02,     // addi x31, x0, 42
-    //         ];
+    //    
 
-    //         let (cpu, _, insns, next_pc) = setup_test_env(&test_program);
-
-    //         // Verify the results
-    //         assert_eq!(insns, 1, "Should have translated only 1 instruction");
-    //         assert_eq!(cpu.regs[30], 0, "Register x30 should still be 0 (skipped instruction)");
-    //         assert_eq!(cpu.regs[31], 0, "Register x31 should be 0"); // JAL forces quit
-    //         assert_eq!(next_pc, 8, "Next PC should be 8 after JAL");
-    //     }
-
-    //     #[test]
-    //     fn test_jal_with_link_instruction() {
-    //         // Define a program with JAL instruction that stores return address
-    //         // 1. JAL to skip over the next instruction, storing PC+4 in x1 (ra)
-    //         // 2. Set x30 to 123 (should be skipped)
-    //         // 3. Set x31 to 42 (should execute)
-    //         let test_program = [
-    //             0xef, 0x00, 0x80, 0x00,     // jal x1, 8 (jump to PC+8, store PC+4 in x1)
-    //             0x13, 0x0f, 0xb0, 0x07,     // addi x30, x0, 123 (should be skipped)
-    //             0x13, 0x0f, 0xa0, 0x02,     // addi x31, x0, 42
-    //         ];
-
-    //         let (cpu, _, insns, next_pc) = setup_test_env(&test_program);
-
-    //         // Verify the results
-    //         assert_eq!(insns, 1, "Should have translated all 1 instructions");
-    //         assert_eq!(cpu.regs[1], 4, "Register x1 should contain return address (PC+4)");
-    //         assert_eq!(cpu.regs[30], 0, "Register x30 should still be 0 (skipped instruction)");
-    //         assert_eq!(next_pc, 8, "Next PC should be 8 after JAL");
-    //     }
-
-    //     #[test]
-    //     fn test_auipc_instruction() {
-    //         // Define a program with AUIPC instruction
-    //         // 1. AUIPC x10, 1 (set x10 to PC + (1 << 12))
-    //         // 2. Set x20 to expected value for verification
-    //         let test_program = [
-    //             0x17, 0x15, 0x00, 0x00,     // auipc x10, 1 (PC + 4096)
-    //             0x13, 0x0a, 0x00, 0x00,     // addi x20, x0, 0 (we'll manually check x10 value)
-    //         ];
-
-    //         let (cpu, _, insns, next_pc) = setup_test_env(&test_program);
-
-    //         // PC starts at 0, so x10 should be 0 + (1 << 12) = 4096
-    //         assert_eq!(insns, 2, "Should have translated all 2 instructions");
-    //         assert_eq!(cpu.regs[10], 4096, "AUIPC should set x10 to PC + (1 << 12)");
-    //         assert_eq!(cpu.regs[20], 0, "Register x20 should be 0");
-    //         assert_eq!(next_pc, 8, "Next PC should be 8 after execution");
-    //     }
-
-    //     #[test]
-    //     fn test_byte_load_store_instructions() {
-    //         // Define a program to test LB, LBU, SB instructions
-    //         // 1. Set x10 to address 1024
-    //         // 2. Set x20 to 0xFF (will be sign-extended but we only store the bottom byte)
-    //         // 3. Store byte from x20 to address in x10 (SB)
-    //         // 4. Load signed byte from address in x10 to x21 (LB)
-    //         // 5. Load unsigned byte from address in x10 to x22 (LBU)
-    //         let test_program = [
-    //             0x13, 0x05, 0x00, 0x40,     // addi x10, x0, 1024
-    //             0x13, 0x0a, 0xf0, 0x0f,     // addi x20, x0, 0xff (will be sign-extended)
-    //             0x23, 0x00, 0x45, 0x01,     // sb x20, 0(x10)
-    //             0x83, 0x0a, 0x05, 0x00,     // lb x21, 0(x10)
-    //             0x03, 0x4b, 0x05, 0x00,     // lbu x22, 0(x10)
-    //         ];
-
-    //         let (cpu, _, insns, next_pc) = setup_test_env(&test_program);
-
-    //         // Verify the results:
-    //         // 0xFF as signed byte is -1 when sign-extended to 32 bits
-    //         // 0xFF as unsigned byte is 255
-    //         assert_eq!(insns, 5, "Should have translated all 5 instructions");
-    //         assert_eq!(cpu.regs[10], 1024, "Register x10 should be 1024");
-    //         assert_eq!(cpu.mem[1024], 0xFF, "Memory at x10 should be 0xFF");
-    //         assert_eq!(cpu.regs[20] & 0xFF, 0xFF, "Register x20 low byte should be 0xFF");
-    //         assert_eq!(cpu.regs[21] as i32, -1, "LB should sign-extend 0xFF to -1");
-    //         assert_eq!(cpu.regs[22], 0xFF, "LBU should zero-extend 0xFF to 255");
-    //         assert_eq!(next_pc, 20, "Next PC should be 20 after execution");
-    //     }
-
-    //     #[test]
-    //     fn test_halfword_load_store_instructions() {
-    //         // Define a program to test LH, LHU, SH instructions
-    //         // 1. Set x10 to address 1024
-    //         // 2. Set x20 to 0xFFFF (will be sign-extended but we only store the bottom halfword)
-    //         // 3. Store halfword from x20 to address in x10 (SH)
-    //         // 4. Load signed halfword from address in x10 to x21 (LH)
-    //         // 5. Load unsigned halfword from address in x10 to x22 (LHU)
-    //         let test_program = [
-    //             0x13, 0x05, 0x00, 0x40,     // addi x10, x0, 1024
-    //             0x13, 0x0a, 0xf0, 0xff,     // addi x20, x0, -1 (0xFFFF sign-extended)
-    //             0x23, 0x10, 0x45, 0x01,     // sh x20, 0(x10)
-    //             0x83, 0x1a, 0x05, 0x00,     // lh x21, 0(x10)
-    //             0x03, 0x5b, 0x05, 0x00,     // lhu x22, 0(x10)
-    //         ];
-
-    //         let (cpu, _, insns, next_pc) = setup_test_env(&test_program);
-
-    //         // Verify the results:
-    //         // 0xFFFF as signed halfword is -1 when sign-extended to 32 bits
-    //         // 0xFFFF as unsigned halfword is 65535
-    //         assert_eq!(insns, 5, "Should have translated all 5 instructions");
-    //         assert_eq!(cpu.regs[10], 1024, "Register x10 should be 100");
-    //         assert_eq!(cpu.regs[20] as i32, -1, "Register x20 should be -1");
-    //         assert_eq!(cpu.regs[21] as i32, -1, "LH should sign-extend 0xFFFF to -1");
-    //         assert_eq!(cpu.regs[22], 0xFFFF, "LHU should zero-extend 0xFFFF to 65535");
-    //         assert_eq!(next_pc, 20, "Next PC should be 20 after execution");
-    //     }
 
     //     #[test]
     //     fn test_sra_instruction() {

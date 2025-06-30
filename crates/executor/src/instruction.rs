@@ -113,7 +113,13 @@ impl Instruction {
     /// Returns if the instruction is an addi instruction.
     #[must_use]
     pub const fn is_addi_instruction(&self) -> bool {
-        !self.imm_b && self.imm_c && self.op_b == 0
+        !self.imm_b && self.imm_c
+    }
+
+    /// Returns if the instruction has an immediate value in the C operand.
+    #[must_use]
+    pub const fn has_imm_c(&self) -> bool {
+        self.imm_c
     }
 }
 
