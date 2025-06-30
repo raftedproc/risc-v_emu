@@ -1,4 +1,4 @@
-use std::ptr::null;
+use std::{ops::Shl, ptr::null};
 
 use crate::{memory::call_mem_store, store_registers_to_cpu, Opcode};
 use cranelift_codegen::ir::{condcodes::IntCC, *};
@@ -448,53 +448,53 @@ pub fn compile_tb<'a>(
 
                 call_mem_store(jit, &mut b, memory_ptr, addr, val);
             }
-            // Opcode::JAL => {
-            //     // Jump and link - terminal instruction
-            //     let (rd, imm) = inst.j_type();
+            Opcode::JAL => {
+                // Jump and link - terminal instruction
+                let (rd, imm) = inst.j_type();
 
-            //     // Store return address (PC+4) in rd
-            //     let return_addr = b.ins().iconst(types::I32, (pc + 4) as i64);
-            //     define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, return_addr);
+                // Store return address (PC+4) in rd
+                let return_addr = b.ins().iconst(types::I32, (pc + 4) as i64);
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, return_addr);
 
-            //     // Calculate target address
-            //     let imm = imm as i64;
-            //     let target_pc = b
-            //         .ins()
-            //         .iconst(types::I32, (pc as i64) + imm);
+                // Calculate target address
+                let imm = imm as i64;
+                let target_pc = b
+                    .ins()
+                    .iconst(types::I32, (pc as i64) + imm);
 
-            //     // Terminate the current translation block and jump to target
-            //     store_registers_to_cpu(&mut b, register_file_ptr, &regs, &dirty_regs);
-            //     b.ins().return_(&[target_pc]);
-            //     term_was_added = true;
-            //     cnt += 1;
-            //     break;
-            // }
-            // Opcode::JALR => {
-            //     let (rd, rs1, imm) = inst.i_type();
-            //     let rs1 = load_reg_if_needed_and_not_dirty(
-            //         &mut b,
-            //         register_file_ptr,
-            //         rs1 as usize,
-            //         &mut regs_read_or_changed_so_far,
-            //         &mut dirty_regs,
-            //         &regs,
-            //     );
+                // Terminate the current translation block and jump to target
+                store_registers_to_cpu(&mut b, register_file_ptr, &regs, &dirty_regs);
+                b.ins().return_(&[target_pc]);
+                term_was_added = true;
+                cnt += 1;
+                break;
+            }
+            Opcode::JALR => {
+                let (rd, rs1, imm) = inst.i_type();
+                let rs1 = load_reg_if_needed_and_not_dirty(
+                    &mut b,
+                    register_file_ptr,
+                    rs1 as usize,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    &regs,
+                );
 
-            //     let target = b.use_var(regs[rs1]);
-            //     let imm = imm as i64;
-            //     let next = b.ins().iadd_imm(target, imm);
-            //     let const_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
-            //     define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, const_pc);
+                let target = b.use_var(regs[rs1]);
+                let imm = imm as i64;
+                let next = b.ins().iadd_imm(target, imm);
+                let const_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, const_pc);
 
-            //     // quit early after J-instruction
-            //     store_registers_to_cpu(&mut b, register_file_ptr, &regs, &dirty_regs);
+                // quit early after J-instruction
+                store_registers_to_cpu(&mut b, register_file_ptr, &regs, &dirty_regs);
 
-            //     b.ins().return_(&[next]);
-            //     term_was_added = true;
-            //     cnt += 1;
+                b.ins().return_(&[next]);
+                term_was_added = true;
+                cnt += 1;
 
-            //     break;
-            // }
+                break;
+            }
             //     OpcodeKind::BaseI(BaseIOpcode::BEQ) => {
             //         // Branch if equal - terminal instruction
             //         let Instruction { rs1, rs2, imm, .. } = inst;
@@ -727,7 +727,7 @@ pub fn compile_tb<'a>(
                 // Add Upper Immediate to PC
                 let (rd, imm) = inst.u_type();
                 let rd = rd as u32;
-                let shifted_imm: i64 = imm.into();
+                let shifted_imm: i64 = (imm as i64) << 12;
                 let result = b
                     .ins()
                     .iconst(types::I32, (pc as i64) + (shifted_imm));
@@ -1426,92 +1426,93 @@ mod tests {
             assert_eq!(runtime.register(Register::X20), 123);
             assert_eq!(runtime.state.memory_.load32(8), 123);
         }
-        // #[test]
-        // fn test_jal_instruction() {
-        //     // Program:
-        //     //   jal  x0, 8       # jump ahead by 8 bytes (skip next inst)
-        //     //   addi x30, x0, 123  (should be skipped)
-        //     //   addi x31, x0, 42   (would execute after branch target)
-        //     let instructions = vec![
-        //         Instruction::new(Opcode::JAL, 0, 0, 8, false, true),     // jal x0, 8
-        //         Instruction::new(Opcode::ADD, 30, 0, 123, false, true),  // addi x30, x0, 123
-        //         Instruction::new(Opcode::ADD, 31, 0, 42, false, true),   // addi x31, x0, 42
-        //     ];
+        #[test]
+        fn test_jal_instruction() {
+            // Program:
+            //   jal  x0, 8       # jump ahead by 8 bytes (skip next inst)
+            //   addi x30, x0, 123  (should be skipped)
+            //   addi x31, x0, 42   (would execute after branch target)
+            let instructions = vec![
+                Instruction::new(Opcode::JAL, 0, 8, 0, false, true),     // jal x0, 8
+                Instruction::new(Opcode::ADD, 30, 0, 123, false, true),  // addi x30, x0, 123
+                Instruction::new(Opcode::ADD, 31, 0, 42, false, true),   // addi x31, x0, 42
+            ];
 
-        //     let program = Program::new(instructions, 0, 0);
-        //     let mut runtime = Executor::new(program);
-        //     let (insns, next_pc) = setup_test_env_with_cpu(&mut runtime);
+            let program = Program::new(instructions, 0, 0);
+            let mut runtime = Executor::new(program);
+            let (insns, next_pc) = setup_test_env_with_cpu(&mut runtime);
 
-        //     assert_eq!(insns, 1);
-        //     assert_eq!(runtime.register(Register::X30), 0);
-        //     assert_eq!(runtime.register(Register::X31), 0);
-        //     assert_eq!(next_pc, 8);
-        // }
+            assert_eq!(insns, 1);
+            assert_eq!(runtime.register(Register::X30), 0);
+            assert_eq!(runtime.register(Register::X31), 0);
+            assert_eq!(next_pc, 8);
+        }
 
-        // #[test]
-        // fn test_jal_with_link_instruction() {
-        //     // Program:
-        //     //   jal  x1, 8        # jump ahead by 8 and store return addr in x1
-        //     //   addi x30, x0, 123 # skipped
-        //     //   addi x31, x0, 42  # branch target
-        //     let instructions = vec![
-        //         Instruction::new(Opcode::JAL, 1, 0, 8, false, true),     // jal x1, 8
-        //         Instruction::new(Opcode::ADD, 30, 0, 123, false, true),  // addi x30, x0, 123
-        //         Instruction::new(Opcode::ADD, 31, 0, 42, false, true),   // addi x31, x0, 42
-        //     ];
+        #[test]
+        fn test_jal_with_link_instruction() {
+            // Program:
+            //   jal  x1, 8        # jump ahead by 8 and store return addr in x1
+            //   addi x30, x0, 123 # skipped
+            //   addi x31, x0, 42  # branch target
+            let instructions = vec![
+                Instruction::new(Opcode::JAL, 1, 8, 0, false, true),     // jal x1, 8
+                Instruction::new(Opcode::ADD, 30, 0, 123, false, true),  // addi x30, x0, 123
+                Instruction::new(Opcode::ADD, 31, 0, 42, false, true),   // addi x31, x0, 42
+            ];
 
-        //     let program = Program::new(instructions, 0, 0);
-        //     let mut runtime = Executor::new(program);
-        //     let (insns, next_pc) = setup_test_env_with_cpu(&mut runtime);
+            let program = Program::new(instructions, 0, 0);
+            let mut runtime = Executor::new(program);
+            let (insns, next_pc) = setup_test_env_with_cpu(&mut runtime);
 
-        //     assert_eq!(insns, 1);
-        //     assert_eq!(runtime.register(Register::X1), 4);   // return address PC+4
-        //     assert_eq!(runtime.register(Register::X30), 0);
-        //     assert_eq!(next_pc, 8);
-        // }
+            assert_eq!(insns, 1);
+            assert_eq!(runtime.register(Register::X1), 4);   // return address PC+4
+            assert_eq!(runtime.register(Register::X30), 0);
+            assert_eq!(next_pc, 8);
+        }
 
-        // #[test]
-        // fn test_auipc_instruction() {
-        //     // Program:
-        //     //   auipc x10, 1   # x10 = PC + 1<<12 = 4096
-        //     //   addi  x20, x0, 0  # dummy instruction
-        //     let instructions = vec![
-        //         Instruction::new(Opcode::AUIPC, 10, 1, 0, true, false),  // auipc x10, 1
-        //         Instruction::new(Opcode::ADD, 20, 0, 0, false, true),    // addi x20, x0, 0
-        //     ];
+        #[test]
+        fn test_auipc_instruction() {
+            // TODO test with rd = X0 (should be a no-op)
+            // Program:
+            //   auipc x10, 1   # x10 = PC + 1<<12 = 4096
+            //   addi  x20, x0, 0  # dummy instruction
+            let instructions = vec![
+                Instruction::new(Opcode::AUIPC, 10, 1, 0, true, false),  // auipc x10, 1
+                Instruction::new(Opcode::ADD, 20, 0, 0, false, true),    // addi x20, x0, 0
+            ];
 
-        //     let program = Program::new(instructions, 0, 0);
-        //     let mut runtime = Executor::new(program);
-        //     let (insns, next_pc) = setup_test_env_with_cpu(&mut runtime);
+            let program = Program::new(instructions, 0, 0);
+            let mut runtime = Executor::new(program);
+            let (insns, next_pc) = setup_test_env_with_cpu(&mut runtime);
 
-        //     assert_eq!(insns, 2, "Should have translated all 2 instructions");
-        //     assert_eq!(runtime.register(Register::X10), 4096);
-        //     assert_eq!(runtime.register(Register::X20), 0);
-        //     assert_eq!(next_pc, 8);
-        // }
+            assert_eq!(insns, 2, "Should have translated all 2 instructions");
+            assert_eq!(runtime.register(Register::X10), 4096);
+            assert_eq!(runtime.register(Register::X20), 0);
+            assert_eq!(next_pc, 8);
+        }
 
-        // #[test]
-        // fn test_jalr_instruction() {
-        //     // Program:
-        //     //   addi x10, x0, 20   # load jump target 20
-        //     //   jalr x1, 0(x10)    # jump to x10, link return addr into x1
-        //     //   addi x30, x0, 1    # should be skipped
-        //     let instructions = vec![
-        //         Instruction::new(Opcode::ADD, 10, 0, 20, false, true),   // addi x10, x0, 20
-        //         Instruction::new(Opcode::JALR, 1, 10, 0, false, true),   // jalr x1, 0(x10)
-        //         Instruction::new(Opcode::ADD, 30, 0, 1, false, true),    // addi x30, x0, 1
-        //     ];
+        #[test]
+        fn test_jalr_instruction() {
+            // Program:
+            //   addi x10, x0, 20   # load jump target 20
+            //   jalr x1, 0(x10)    # jump to x10, link return addr into x1
+            //   addi x30, x0, 1    # should be skipped
+            let instructions = vec![
+                Instruction::new(Opcode::ADD, 10, 0, 20, false, true),   // addi x10, x0, 20
+                Instruction::new(Opcode::JALR, 1, 10, 0, false, true),   // jalr x1, 0(x10)
+                Instruction::new(Opcode::ADD, 30, 0, 1, false, true),    // addi x30, x0, 1
+            ];
 
-        //     let program = Program::new(instructions, 0, 0);
-        //     let mut runtime = Executor::new(program);
-        //     let (insns, next_pc) = setup_test_env_with_cpu(&mut runtime);
+            let program = Program::new(instructions, 0, 0);
+            let mut runtime = Executor::new(program);
+            let (insns, next_pc) = setup_test_env_with_cpu(&mut runtime);
 
-        //     assert_eq!(insns, 2, "Should have translated all 2 instructions");
-        //     assert_eq!(next_pc, 20, "Next PC should be 20 after execution");
-        //     assert_eq!(runtime.register(Register::X10), 20);
-        //     assert_eq!(runtime.register(Register::X1), 8);   // return address PC+4
-        //     assert_eq!(runtime.register(Register::X30), 0);
-        // }
+            assert_eq!(insns, 2, "Should have translated all 2 instructions");
+            assert_eq!(next_pc, 20, "Next PC should be 20 after execution");
+            assert_eq!(runtime.register(Register::X10), 20);
+            assert_eq!(runtime.register(Register::X1), 8);   // return address PC+4
+            assert_eq!(runtime.register(Register::X30), 0);
+        }
 
         // ... rest of the code remains the same ...
     //             0x13, 0x05, 0x70, 0x00,     // addi x10, x0, 7      # set x10 to 7
