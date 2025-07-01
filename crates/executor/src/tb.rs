@@ -495,234 +495,228 @@ pub fn compile_tb<'a>(
 
                 break;
             }
-            //     OpcodeKind::BaseI(BaseIOpcode::BEQ) => {
-            //         // Branch if equal - terminal instruction
-            //         let Instruction { rs1, rs2, imm, .. } = inst;
-            //         let (rs1, rs2) = load_two_regs(
-            //             &mut b,
-            //             cpu_ptr,
-            //             &regs,
-            //             &mut regs_read_or_changed_so_far,
-            //             &mut dirty_regs,
-            //             rs1,
-            //             rs2,
-            //         );
+            Opcode::BEQ => {
+                // Branch if equal - terminal instruction
+                let (rs1, rs2, imm) = inst.b_type();
 
-            //         let v1 = b.use_var(regs[rs1]);
-            //         let v2 = b.use_var(regs[rs2]);
+                let (rs1, rs2) = load_two_regs(
+                    &mut b,
+                    register_file_ptr,
+                    &regs,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    rs1 as u32,
+                    rs2 as u32,
+                );
 
-            //         // Compare rs1 and rs2
-            //         let cond = b.ins().icmp(IntCC::Equal, v1, v2);
+                let v1 = b.use_var(regs[rs1]);
+                let v2 = b.use_var(regs[rs2]);
 
-            //         // Calculate target and fallthrough addresses
-            //         // Calculate target address (pc + offset) ensuring proper casting
-            //         pc += 4;
-            //         let target_pc = b
-            //             .ins()
-            //             .iconst(types::I32, (pc as i64) + (imm.unwrap() as i64));
-            //         let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
+                // Compare rs1 and rs2
+                let cond = b.ins().icmp(IntCC::Equal, v1, v2);
 
-            //         // Select which PC to branch to based on condition
-            //         let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
+                // Calculate target and fallthrough addresses
+                // Calculate target address (pc + offset) ensuring proper casting
+                pc += 4;
+                let imm = imm as i64;
+                let target_pc = b.ins().iconst(types::I32, (pc as i64) + imm);
+                let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
 
-            //         // Terminate the current translation block
-            //         store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
-            //         b.ins().return_(&[next_pc]);
-            //         term_was_added = true;
-            //         cnt += 1;
-            //         break;
-            //     }
-            //     OpcodeKind::BaseI(BaseIOpcode::BNE) => {
-            //         // Branch if not equal - terminal instruction
-            //         let Instruction { rs1, rs2, imm, .. } = inst;
-            //         let (rs1, rs2) = load_two_regs(
-            //             &mut b,
-            //             cpu_ptr,
-            //             &regs,
-            //             &mut regs_read_or_changed_so_far,
-            //             &mut dirty_regs,
-            //             rs1,
-            //             rs2,
-            //         );
+                // Select which PC to branch to based on condition
+                let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
 
-            //         let v1 = b.use_var(regs[rs1]);
-            //         let v2 = b.use_var(regs[rs2]);
+                // Terminate the current translation block
+                store_registers_to_cpu(&mut b, register_file_ptr, &regs, &dirty_regs);
+                b.ins().return_(&[next_pc]);
+                term_was_added = true;
+                cnt += 1;
+                break;
+            }
+            Opcode::BNE => {
+                // Branch if not equal - terminal instruction
+                let (rs1, rs2, imm) = inst.b_type();
+                let (rs1, rs2) = load_two_regs(
+                    &mut b,
+                    register_file_ptr,
+                    &regs,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    rs1 as u32,
+                    rs2 as u32,
+                );
 
-            //         // Compare rs1 and rs2
-            //         let cond = b.ins().icmp(IntCC::NotEqual, v1, v2);
+                let v1 = b.use_var(regs[rs1]);
+                let v2 = b.use_var(regs[rs2]);
 
-            //         pc += 4;
+                // Compare rs1 and rs2
+                let cond = b.ins().icmp(IntCC::NotEqual, v1, v2);
 
-            //         // Calculate target and fallthrough addresses
-            //         // Calculate target address (pc + offset) ensuring proper casting
-            //         let target_pc = b
-            //             .ins()
-            //             .iconst(types::I32, (pc as i64) + (imm.unwrap() as i64));
-            //         let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
+                pc += 4;
 
-            //         // Select which PC to branch to based on condition
-            //         let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
+                let imm = imm as i64;
+                // Calculate target and fallthrough addresses
+                // Calculate target address (pc + offset) ensuring proper casting
+                let target_pc = b.ins().iconst(types::I32, (pc as i64) + imm);
+                let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
 
-            //         // Terminate the current translation block
-            //         store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
-            //         b.ins().return_(&[next_pc]);
-            //         term_was_added = true;
-            //         cnt += 1;
-            //         break;
-            //     }
-            //     OpcodeKind::BaseI(BaseIOpcode::BLT) => {
-            //         // Branch if less than - terminal instruction
-            //         let Instruction { rs1, rs2, imm, .. } = inst;
-            //         let (rs1, rs2) = load_two_regs(
-            //             &mut b,
-            //             cpu_ptr,
-            //             &regs,
-            //             &mut regs_read_or_changed_so_far,
-            //             &mut dirty_regs,
-            //             rs1,
-            //             rs2,
-            //         );
+                // Select which PC to branch to based on condition
+                let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
 
-            //         let v1 = b.use_var(regs[rs1]);
-            //         let v2 = b.use_var(regs[rs2]);
+                // Terminate the current translation block
+                store_registers_to_cpu(&mut b, register_file_ptr, &regs, &dirty_regs);
+                b.ins().return_(&[next_pc]);
+                term_was_added = true;
+                cnt += 1;
+                break;
+            }
+            Opcode::BLT => {
+                // Branch if less than - terminal instruction
+                let (rs1, rs2, imm) = inst.b_type();
+                let (rs1, rs2) = load_two_regs(
+                    &mut b,
+                    register_file_ptr,
+                    &regs,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    rs1 as u32,
+                    rs2 as u32,
+                );
 
-            //         // Compare rs1 < rs2 (signed)
-            //         let cond = b.ins().icmp(IntCC::SignedLessThan, v1, v2);
+                let v1 = b.use_var(regs[rs1]);
+                let v2 = b.use_var(regs[rs2]);
 
-            //         pc += 4;
+                // Compare rs1 < rs2 (signed)
+                let cond = b.ins().icmp(IntCC::SignedLessThan, v1, v2);
 
-            //         // Calculate target and fallthrough addresses
-            //         // Calculate target address (pc + offset) ensuring proper casting
-            //         let target_pc = b
-            //             .ins()
-            //             .iconst(types::I32, (pc as i64) + (imm.unwrap() as i64));
-            //         let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
+                pc += 4;
 
-            //         // Select which PC to branch to based on condition
-            //         let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
+                let imm = imm as i64;
+                // Calculate target and fallthrough addresses
+                // Calculate target address (pc + offset) ensuring proper casting
+                let target_pc = b.ins().iconst(types::I32, (pc as i64) + imm);
+                let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
 
-            //         // Terminate the current translation block
-            //         store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
-            //         b.ins().return_(&[next_pc]);
-            //         term_was_added = true;
-            //         cnt += 1;
-            //         break;
-            //     }
-            //     OpcodeKind::BaseI(BaseIOpcode::BGE) => {
-            //         // Branch if greater than or equal - terminal instruction
-            //         let Instruction { rs1, rs2, imm, .. } = inst;
-            //         let (rs1, rs2) = load_two_regs(
-            //             &mut b,
-            //             cpu_ptr,
-            //             &regs,
-            //             &mut regs_read_or_changed_so_far,
-            //             &mut dirty_regs,
-            //             rs1,
-            //             rs2,
-            //         );
+                // Select which PC to branch to based on condition
+                let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
 
-            //         let v1 = b.use_var(regs[rs1]);
-            //         let v2 = b.use_var(regs[rs2]);
+                // Terminate the current translation block
+                store_registers_to_cpu(&mut b, register_file_ptr, &regs, &dirty_regs);
+                b.ins().return_(&[next_pc]);
+                term_was_added = true;
+                cnt += 1;
+                break;
+            }
+            Opcode::BGE => {
+                // Branch if greater than or equal - terminal instruction
+                let (rs1, rs2, imm) = inst.b_type();
+                let (rs1, rs2) = load_two_regs(
+                    &mut b,
+                    register_file_ptr,
+                    &regs,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    rs1 as u32,
+                    rs2 as u32,
+                );
 
-            //         // Compare rs1 >= rs2 (signed)
-            //         let cond = b.ins().icmp(IntCC::SignedGreaterThanOrEqual, v1, v2);
+                let v1 = b.use_var(regs[rs1]);
+                let v2 = b.use_var(regs[rs2]);
 
-            //         // Calculate target and fallthrough addresses
-            //         // Calculate target address (pc + offset) ensuring proper casting
-            //         pc += 4;
+                // Compare rs1 >= rs2 (signed)
+                let cond = b.ins().icmp(IntCC::SignedGreaterThanOrEqual, v1, v2);
 
-            //         let target_pc = b
-            //             .ins()
-            //             .iconst(types::I32, (pc as i64) + (imm.unwrap() as i64));
-            //         let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
+                // Calculate target and fallthrough addresses
+                // Calculate target address (pc + offset) ensuring proper casting
+                pc += 4;
 
-            //         // Select which PC to branch to based on condition
-            //         let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
+                let imm = imm as i64;
+                let target_pc = b.ins().iconst(types::I32, (pc as i64) + imm);
+                let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
 
-            //         // Terminate the current translation block
-            //         store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
-            //         b.ins().return_(&[next_pc]);
-            //         term_was_added = true;
-            //         cnt += 1;
-            //         break;
-            //     }
-            //     OpcodeKind::BaseI(BaseIOpcode::BLTU) => {
-            //         // Branch if less than unsigned - terminal instruction
-            //         let Instruction { rs1, rs2, imm, .. } = inst;
-            //         let (rs1, rs2) = load_two_regs(
-            //             &mut b,
-            //             cpu_ptr,
-            //             &regs,
-            //             &mut regs_read_or_changed_so_far,
-            //             &mut dirty_regs,
-            //             rs1,
-            //             rs2,
-            //         );
+                // Select which PC to branch to based on condition
+                let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
 
-            //         let v1 = b.use_var(regs[rs1]);
-            //         let v2 = b.use_var(regs[rs2]);
+                // Terminate the current translation block
+                store_registers_to_cpu(&mut b, register_file_ptr, &regs, &dirty_regs);
+                b.ins().return_(&[next_pc]);
+                term_was_added = true;
+                cnt += 1;
+                break;
+            }
+            Opcode::BLTU => {
+                // Branch if less than unsigned - terminal instruction
+                let (rs1, rs2, imm) = inst.b_type();
+                let (rs1, rs2) = load_two_regs(
+                    &mut b,
+                    register_file_ptr,
+                    &regs,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    rs1 as u32,
+                    rs2 as u32,
+                );
 
-            //         // Compare rs1 < rs2 (unsigned)
-            //         let cond = b.ins().icmp(IntCC::UnsignedLessThan, v1, v2);
+                let v1 = b.use_var(regs[rs1]);
+                let v2 = b.use_var(regs[rs2]);
 
-            //         pc += 4;
+                // Compare rs1 < rs2 (unsigned)
+                let cond = b.ins().icmp(IntCC::UnsignedLessThan, v1, v2);
 
-            //         // Calculate target and fallthrough addresses
-            //         // Calculate target address (pc + offset) ensuring proper casting
-            //         let target_pc = b
-            //             .ins()
-            //             .iconst(types::I32, (pc as i64) + (imm.unwrap() as i64));
-            //         let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
+                pc += 4;
 
-            //         // Select which PC to branch to based on condition
-            //         let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
+                let imm = imm as i64;
+                // Calculate target and fallthrough addresses
+                // Calculate target address (pc + offset) ensuring proper casting
+                let target_pc = b.ins().iconst(types::I32, (pc as i64) + imm);
+                let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
 
-            //         // Terminate the current translation block
-            //         store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
-            //         b.ins().return_(&[next_pc]);
-            //         term_was_added = true;
-            //         cnt += 1;
-            //         break;
-            //     }
-            //     OpcodeKind::BaseI(BaseIOpcode::BGEU) => {
-            //         // Branch if greater than or equal unsigned - terminal instruction
-            //         let Instruction { rs1, rs2, imm, .. } = inst;
-            //         let (rs1, rs2) = load_two_regs(
-            //             &mut b,
-            //             cpu_ptr,
-            //             &regs,
-            //             &mut regs_read_or_changed_so_far,
-            //             &mut dirty_regs,
-            //             rs1,
-            //             rs2,
-            //         );
+                // Select which PC to branch to based on condition
+                let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
 
-            //         let v1 = b.use_var(regs[rs1]);
-            //         let v2 = b.use_var(regs[rs2]);
+                // Terminate the current translation block
+                store_registers_to_cpu(&mut b, register_file_ptr, &regs, &dirty_regs);
+                b.ins().return_(&[next_pc]);
+                term_was_added = true;
+                cnt += 1;
+                break;
+            }
+            Opcode::BGEU => {
+                // Branch if greater than or equal unsigned - terminal instruction
+                let (rs1, rs2, imm) = inst.b_type();
+                let (rs1, rs2) = load_two_regs(
+                    &mut b,
+                    register_file_ptr,
+                    &regs,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    rs1 as u32,
+                    rs2 as u32,
+                );
 
-            //         // Compare rs1 >= rs2 (unsigned)
-            //         let cond = b.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, v1, v2);
+                let v1 = b.use_var(regs[rs1]);
+                let v2 = b.use_var(regs[rs2]);
 
-            //         pc += 4;
+                // Compare rs1 >= rs2 (unsigned)
+                let cond = b.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, v1, v2);
 
-            //         // Calculate target and fallthrough addresses
-            //         // Calculate target address (pc + offset) ensuring proper casting
-            //         let target_pc = b
-            //             .ins()
-            //             .iconst(types::I32, (pc as i64) + (imm.unwrap() as i64));
-            //         let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
+                pc += 4;
 
-            //         // Select which PC to branch to based on condition
-            //         let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
+                let imm = imm as i64;
+                // Calculate target and fallthrough addresses
+                // Calculate target address (pc + offset) ensuring proper casting
+                let target_pc = b.ins().iconst(types::I32, (pc as i64) + imm);
+                let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
 
-            //         // Terminate the current translation block
-            //         store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
-            //         b.ins().return_(&[next_pc]);
-            //         term_was_added = true;
-            //         cnt += 1;
-            //         break;
-            //     }
-           
+                // Select which PC to branch to based on condition
+                let next_pc = b.ins().select(cond, target_pc, fallthrough_pc);
+
+                // Terminate the current translation block
+                store_registers_to_cpu(&mut b, register_file_ptr, &regs, &dirty_regs);
+                b.ins().return_(&[next_pc]);
+                term_was_added = true;
+                cnt += 1;
+                break;
+            }
             Opcode::AUIPC => {
                 // Add Upper Immediate to PC
                 let (rd, imm) = inst.u_type();
@@ -987,25 +981,27 @@ pub fn compile_tb<'a>(
             //         cnt += 1;
             //         break;
             //     }
-            //     OpcodeKind::BaseI(BaseIOpcode::EBREAK) => {
-            //         // Environment break - terminal instruction
-            //         store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
+            // Opcode::EBREAK => {
+            //     // Environment break - terminal instruction
+            //     store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
 
-            //         // Return a special value to indicate an EBREAK (could be handled by the main loop)
-            //         let ebreak_indicator = b.ins().iconst(types::I32, 0xEB8EA);
-            //         b.ins().return_(&[ebreak_indicator]);
-            //         term_was_added = true;
-            //         cnt += 1;
-            //         break;
-            //     }
+            //     // Return a special value to indicate an EBREAK (could be handled by the main loop)
+            //     let ebreak_indicator = b.ins().iconst(types::I32, 0xEB8EA);
+            //     b.ins().return_(&[ebreak_indicator]);
+            //     term_was_added = true;
+            //     cnt += 1;
+            //     break;
+            // }
             _ => unimplemented!("demo supports few instrs"),
         }
         pc += 4;
         cnt += 1;
     }
 
+    println!("compile_tb ########### cnt: {}", cnt);
     // return next PC if we reached the limit or if there was no terminal instruction
-    if cnt == max_insns || !term_was_added {
+    if !term_was_added || (!term_was_added && cnt == max_insns) {
+        println!("compile_tb 11111 cnt: {}", cnt);
         store_registers_to_cpu(&mut b, register_file_ptr, &regs, &dirty_regs);
         let rvals = &[b.ins().iconst(types::I32, pc as i64)];
         b.ins().return_(rvals);
@@ -1016,10 +1012,12 @@ pub fn compile_tb<'a>(
     let sign = b.func.signature.clone();
     b.finalize();
 
+    println!("{}", ctx.func.display());
+
     let id = jit.declare_anonymous_function(&sign).unwrap();
     jit.define_function(id, &mut ctx).unwrap();
 
-    println!("{}", ctx.func.display());
+    // println!("{}", ctx.func.display());
 
     jit.clear_context(&mut ctx);
     jit.finalize_definitions().expect("must be ok");
