@@ -1,6 +1,10 @@
 use std::{ops::Shl, ptr::null};
 
-use crate::{memory::call_mem_store, store_registers_to_cpu, Opcode};
+use crate::{
+    jitwrapper::{TBCacheEntry, SLOW_CACHE_MASK},
+    memory::call_mem_store,
+    store_registers_to_cpu, Opcode,
+};
 use cranelift_codegen::ir::{condcodes::IntCC, *};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::JITModule;
@@ -16,16 +20,40 @@ use crate::{
     register, ExecutionMode, ExecutionState, Executor, Instruction,
 };
 
+// TODO merge with populate_fast_cache
+fn populate_slow_cache(
+    current_pc: u32,
+    current_unconstrained: bool,
+    tb: *const u8,
+    slow_tb_cache: &mut SlowTBCache,
+) {
+    let idx = (current_pc >> 8 & SLOW_CACHE_MASK) as usize;
+
+    slow_tb_cache[idx] = Some(TBCacheEntry {
+        pc: current_pc,
+        unconstrained: current_unconstrained,
+        tb,
+    });
+}
+
 pub fn try_to_compile_tb_and_populate_slow_cache<'a>(
     executor: &mut Executor<'a>, // TODO reduce Executor down to necessary attributes
-    // state: &mut ExecutionState,
     jit_wrapper: &mut JITWrapper,
-    _slow_tb_cache: &mut SlowTBCache,
+    slow_tb_cache: &mut SlowTBCache,
 ) -> ExecutionMode {
-    let _ = compile_tb(executor, /*state,*/ jit_wrapper, 256);
+    let (tb_ptr, insns_compiled) = compile_tb(executor, jit_wrapper, 256);
 
-    // TODO remove to use TB
-    ExecutionMode::Emulator
+    if insns_compiled > 0 {
+        populate_slow_cache(
+            executor.state.pc,
+            executor.unconstrained,
+            tb_ptr,
+            slow_tb_cache,
+        );
+        ExecutionMode::TB(tb_ptr)
+    } else {
+        ExecutionMode::Emulator
+    }
 }
 
 pub fn compile_tb<'a>(
@@ -83,18 +111,6 @@ pub fn compile_tb<'a>(
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, r);
             }
             Opcode::SUB => {
-                // let Instruction {
-                //     op_a, op_b, op_c, ..
-                // } = inst;
-                // let (v1, v2) = preload_for_bin_op(
-                //     &mut b,
-                //     register_file_ptr,
-                //     &mut regs_read_or_changed_so_far,
-                //     &mut dirty_regs,
-                //     &regs,
-                //     op_b,
-                //     op_c,
-                // );
                 let (rd, v1, v2) = preload_alu(
                     &mut b,
                     register_file_ptr,
@@ -103,24 +119,12 @@ pub fn compile_tb<'a>(
                     &mut dirty_regs,
                     inst,
                 );
-                
+
                 let v = b.ins().isub(v1, v2);
 
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
             }
             Opcode::XOR => {
-                // let Instruction {
-                //     op_a, op_b, op_c, ..
-                // } = inst;
-                // let (v1, v2) = preload_for_bin_op(
-                //     &mut b,
-                //     register_file_ptr,
-                //     &mut regs_read_or_changed_so_far,
-                //     &mut dirty_regs,
-                //     &regs,
-                //     op_b,
-                //     op_c,
-                // );
                 let (rd, v1, v2) = preload_alu(
                     &mut b,
                     register_file_ptr,
@@ -135,18 +139,6 @@ pub fn compile_tb<'a>(
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
             }
             Opcode::OR => {
-                // let Instruction {
-                //     op_a, op_b, op_c, ..
-                // } = inst;
-                // let (v1, v2) = preload_for_bin_op(
-                //     &mut b,
-                //     register_file_ptr,
-                //     &mut regs_read_or_changed_so_far,
-                //     &mut dirty_regs,
-                //     &regs,
-                //     op_b,
-                //     op_c,
-                // );
                 let (rd, v1, v2) = preload_alu(
                     &mut b,
                     register_file_ptr,
@@ -161,27 +153,6 @@ pub fn compile_tb<'a>(
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
             }
             Opcode::AND => {
-                // let Instruction {
-                //     op_a,
-                //     op_b,
-                //     op_c,
-                //     opcode,
-                //     imm_b,
-                //     imm_c,
-                // } = inst;
-                // println!(
-                //     "AND {} {} {} {} {} {}",
-                //     op_a, op_b, op_c, opcode, imm_b, imm_c
-                // );
-                // let (v1, v2) = preload_for_bin_op(
-                //     &mut b,
-                //     register_file_ptr,
-                //     &mut regs_read_or_changed_so_far,
-                //     &mut dirty_regs,
-                //     &regs,
-                //     op_b,
-                //     op_c,
-                // );
                 let (rd, v1, v2) = preload_alu(
                     &mut b,
                     register_file_ptr,
@@ -196,71 +167,55 @@ pub fn compile_tb<'a>(
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
             }
             Opcode::SLL => {
-                let Instruction {
-                    op_a, op_b, op_c, ..
-                } = inst;
-                let (v1, v2) = preload_for_bin_op(
+                let (rd, v1, v2) = preload_alu(
                     &mut b,
                     register_file_ptr,
+                    &regs,
                     &mut regs_read_or_changed_so_far,
                     &mut dirty_regs,
-                    &regs,
-                    op_b,
-                    op_c,
+                    inst,
                 );
 
                 let v = b.ins().ishl(v1, v2);
 
-                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, op_a, v);
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
             }
             Opcode::SRL => {
-                let Instruction {
-                    op_a, op_b, op_c, ..
-                } = inst;
-                let (v1, v2) = preload_for_bin_op(
+                let (rd, v1, v2) = preload_alu(
                     &mut b,
                     register_file_ptr,
+                    &regs,
                     &mut regs_read_or_changed_so_far,
                     &mut dirty_regs,
-                    &regs,
-                    op_b,
-                    op_c,
+                    inst,
                 );
 
                 let v = b.ins().ushr(v1, v2);
 
-                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, op_a, v);
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
             }
             Opcode::SRA => {
-                let Instruction {
-                    op_a, op_b, op_c, ..
-                } = inst;
-                let (v1, v2) = preload_for_bin_op(
+                let (rd, v1, v2) = preload_alu(
                     &mut b,
                     register_file_ptr,
+                    &regs,
                     &mut regs_read_or_changed_so_far,
                     &mut dirty_regs,
-                    &regs,
-                    op_b,
-                    op_c,
+                    inst,
                 );
 
                 let v = b.ins().sshr(v1, v2); // Arithmetic (signed) shift right
 
-                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, op_a, v);
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
             }
             Opcode::SLT => {
-                let Instruction {
-                    op_a, op_b, op_c, ..
-                } = inst;
-                let (v1, v2) = preload_for_bin_op(
+                let (rd, v1, v2) = preload_alu(
                     &mut b,
                     register_file_ptr,
+                    &regs,
                     &mut regs_read_or_changed_so_far,
                     &mut dirty_regs,
-                    &regs,
-                    op_b,
-                    op_c,
+                    inst,
                 );
 
                 // Use icmp_slt to compare if v1 < v2 (signed comparison)
@@ -269,20 +224,16 @@ pub fn compile_tb<'a>(
                 let one = b.ins().iconst(types::I32, 1);
                 let v = b.ins().select(cond, one, zero);
 
-                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, op_a, v);
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
             }
             Opcode::SLTU => {
-                let Instruction {
-                    op_a, op_b, op_c, ..
-                } = inst;
-                let (v1, v2) = preload_for_bin_op(
+                let (rd, v1, v2) = preload_alu(
                     &mut b,
                     register_file_ptr,
+                    &regs,
                     &mut regs_read_or_changed_so_far,
                     &mut dirty_regs,
-                    &regs,
-                    op_b,
-                    op_c,
+                    inst,
                 );
 
                 // Using SLTU for unsigned comparison
@@ -291,10 +242,9 @@ pub fn compile_tb<'a>(
                 let one = b.ins().iconst(types::I32, 1);
                 let v = b.ins().select(cond, one, zero);
 
-                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, op_a, v);
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
             }
             Opcode::LB => {
-                // let Instruction { op_a, op_b, op_c, .. } = inst;
                 let (rd, rs1, imm) = inst.i_type();
                 let reg_idx = rs1 as usize;
                 let op_b = load_reg_if_needed_and_not_dirty(
@@ -744,260 +694,220 @@ pub fn compile_tb<'a>(
 
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, result);
             }
-            // Opcode::MUL => {
-            //     let Instruction { rd, rs1, rs2, .. } = inst;
-            //     let (rs1, rs2) = load_two_regs(
-            //         &mut b,
-            //         cpu_ptr,
-            //         &regs,
-            //         &mut regs_read_or_changed_so_far,
-            //         &mut dirty_regs,
-            //         rs1,
-            //         rs2,
-            //     );
+            Opcode::MUL => {
+                let (rd, v1, v2) = preload_alu(
+                    &mut b,
+                    register_file_ptr,
+                    &regs,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    inst,
+                );
+                let v = b.ins().imul(v1, v2);
 
-            //     let v1 = b.use_var(regs[rs1]);
-            //     let v2 = b.use_var(regs[rs2]);
-            //     let v = b.ins().imul(v1, v2);
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
+            }
+            Opcode::MULH => {
+                // Multiply high (signed x signed)
+                let (rd, v1, v2) = preload_alu(
+                    &mut b,
+                    register_file_ptr,
+                    &regs,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    inst,
+                );
 
-            //     define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
-            // }
-            //     OpcodeKind::M(raki::MOpcode::MULH) => {
-            //         // Multiply high (signed x signed)
-            //         let Instruction { rd, rs1, rs2, .. } = inst;
-            //         let (rs1, rs2) = load_two_regs(
-            //             &mut b,
-            //             cpu_ptr,
-            //             &regs,
-            //             &mut regs_read_or_changed_so_far,
-            //             &mut dirty_regs,
-            //             rs1,
-            //             rs2,
-            //         );
+                // We need to cast to i64, multiply, then get the high 32 bits
+                let v1_64 = b.ins().sextend(types::I64, v1);
+                let v2_64 = b.ins().sextend(types::I64, v2);
+                let mul_result = b.ins().imul(v1_64, v2_64);
 
-            //         let v1 = b.use_var(regs[rs1]);
-            //         let v2 = b.use_var(regs[rs2]);
+                // Shift right by 32 to get the high bits
+                let shift_amt = b.ins().iconst(types::I64, 32);
+                let high_bits = b.ins().ushr(mul_result, shift_amt);
 
-            //         // We need to cast to i64, multiply, then get the high 32 bits
-            //         let v1_64 = b.ins().sextend(types::I64, v1);
-            //         let v2_64 = b.ins().sextend(types::I64, v2);
-            //         let mul_result = b.ins().imul(v1_64, v2_64);
+                // Truncate back to 32 bits
+                let result_32 = b.ins().ireduce(types::I32, high_bits);
 
-            //         // Shift right by 32 to get the high bits
-            //         let shift_amt = b.ins().iconst(types::I64, 32);
-            //         let high_bits = b.ins().ushr(mul_result, shift_amt);
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, result_32);
+            }
+            Opcode::MULHU => {
+                // Multiply high (unsigned x unsigned)
+                let (rd, v1, v2) = preload_alu(
+                    &mut b,
+                    register_file_ptr,
+                    &regs,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    inst,
+                );
 
-            //         // Truncate back to 32 bits
-            //         let result_32 = b.ins().ireduce(types::I32, high_bits);
+                // We need to cast to u64, multiply, then get the high 32 bits
+                let v1_64 = b.ins().uextend(types::I64, v1);
+                let v2_64 = b.ins().uextend(types::I64, v2);
+                let mul_result = b.ins().imul(v1_64, v2_64);
 
-            //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, result_32);
-            //     }
-            //     OpcodeKind::M(raki::MOpcode::MULHU) => {
-            //         // Multiply high (unsigned x unsigned)
-            //         let Instruction { rd, rs1, rs2, .. } = inst;
-            //         let (rs1, rs2) = load_two_regs(
-            //             &mut b,
-            //             cpu_ptr,
-            //             &regs,
-            //             &mut regs_read_or_changed_so_far,
-            //             &mut dirty_regs,
-            //             rs1,
-            //             rs2,
-            //         );
+                // Shift right by 32 to get the high bits
+                let shift_amt = b.ins().iconst(types::I64, 32);
+                let high_bits = b.ins().ushr(mul_result, shift_amt);
 
-            //         let v1 = b.use_var(regs[rs1]);
-            //         let v2 = b.use_var(regs[rs2]);
+                // Truncate back to 32 bits
+                let result_32 = b.ins().ireduce(types::I32, high_bits);
 
-            //         // We need to cast to u64, multiply, then get the high 32 bits
-            //         let v1_64 = b.ins().uextend(types::I64, v1);
-            //         let v2_64 = b.ins().uextend(types::I64, v2);
-            //         let mul_result = b.ins().imul(v1_64, v2_64);
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, result_32);
+            }
+            Opcode::MULHSU => {
+                // Multiply high (signed x unsigned)
+                let (rd, v1, v2) = preload_alu(
+                    &mut b,
+                    register_file_ptr,
+                    &regs,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    inst,
+                );
 
-            //         // Shift right by 32 to get the high bits
-            //         let shift_amt = b.ins().iconst(types::I64, 32);
-            //         let high_bits = b.ins().ushr(mul_result, shift_amt);
+                // Mixed sign extension: rs1 is signed, rs2 is unsigned
+                let v1_64 = b.ins().sextend(types::I64, v1);
+                let v2_64 = b.ins().uextend(types::I64, v2);
+                let mul_result = b.ins().imul(v1_64, v2_64);
 
-            //         // Truncate back to 32 bits
-            //         let result_32 = b.ins().ireduce(types::I32, high_bits);
+                // Shift right by 32 to get the high bits
+                let shift_amt = b.ins().iconst(types::I64, 32);
+                let high_bits = b.ins().ushr(mul_result, shift_amt);
 
-            //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, result_32);
-            //     }
-            //     OpcodeKind::M(raki::MOpcode::MULHSU) => {
-            //         // Multiply high (signed x unsigned)
-            //         let Instruction { rd, rs1, rs2, .. } = inst;
-            //         let (rs1, rs2) = load_two_regs(
-            //             &mut b,
-            //             cpu_ptr,
-            //             &regs,
-            //             &mut regs_read_or_changed_so_far,
-            //             &mut dirty_regs,
-            //             rs1,
-            //             rs2,
-            //         );
+                // Truncate back to 32 bits
+                let result_32 = b.ins().ireduce(types::I32, high_bits);
 
-            //         let v1 = b.use_var(regs[rs1]);
-            //         let v2 = b.use_var(regs[rs2]);
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, result_32);
+            }
+            Opcode::DIV => {
+                // Signed division
+                let (rd, v1, v2) = preload_alu(
+                    &mut b,
+                    register_file_ptr,
+                    &regs,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    inst,
+                );
 
-            //         // Mixed sign extension: rs1 is signed, rs2 is unsigned
-            //         let v1_64 = b.ins().sextend(types::I64, v1);
-            //         let v2_64 = b.ins().uextend(types::I64, v2);
-            //         let mul_result = b.ins().imul(v1_64, v2_64);
+                // Check for division by zero
+                let zero = b.ins().iconst(types::I32, 0);
+                let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
+                let min_int = b.ins().iconst(types::I32, -2147483648_i32 as i64); // 0x80000000
+                let neg_one = b.ins().iconst(types::I32, -1_i32 as i64);
+                let cmp_with_min = b.ins().icmp(IntCC::Equal, v1, min_int);
+                let cmp_with_neg_one = b.ins().icmp(IntCC::Equal, v2, neg_one);
+                let is_overflow = b.ins().band(cmp_with_min, cmp_with_neg_one);
 
-            //         // Shift right by 32 to get the high bits
-            //         let shift_amt = b.ins().iconst(types::I64, 32);
-            //         let high_bits = b.ins().ushr(mul_result, shift_amt);
+                // Normal division result
+                let div_result = b.ins().sdiv(v1, v2);
 
-            //         // Truncate back to 32 bits
-            //         let result_32 = b.ins().ireduce(types::I32, high_bits);
+                // Select based on special cases
+                let overflow_result = min_int; // For overflow, return MIN_INT
+                let zero_result = neg_one; // For div by zero, return -1
 
-            //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, result_32);
-            //     }
-            //     OpcodeKind::M(raki::MOpcode::DIV) => {
-            //         // Signed division
-            //         let Instruction { rd, rs1, rs2, .. } = inst;
-            //         let (rs1, rs2) = load_two_regs(
-            //             &mut b,
-            //             cpu_ptr,
-            //             &regs,
-            //             &mut regs_read_or_changed_so_far,
-            //             &mut dirty_regs,
-            //             rs1,
-            //             rs2,
-            //         );
+                let temp_result = b.ins().select(is_overflow, overflow_result, div_result);
+                let final_result = b.ins().select(is_zero, zero_result, temp_result);
 
-            //         let v1 = b.use_var(regs[rs1]);
-            //         let v2 = b.use_var(regs[rs2]);
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, final_result);
+            }
+            Opcode::DIVU => {
+                // Unsigned division
+                let (rd, v1, v2) = preload_alu(
+                    &mut b,
+                    register_file_ptr,
+                    &regs,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    inst,
+                );
 
-            //         // Check for division by zero
-            //         let zero = b.ins().iconst(types::I32, 0);
-            //         let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
-            //         let min_int = b.ins().iconst(types::I32, -2147483648_i32 as i64); // 0x80000000
-            //         let neg_one = b.ins().iconst(types::I32, -1_i32 as i64);
-            //         let cmp_with_min = b.ins().icmp(IntCC::Equal, v1, min_int);
-            //         let cmp_with_neg_one = b.ins().icmp(IntCC::Equal, v2, neg_one);
-            //         let is_overflow = b.ins().band(cmp_with_min, cmp_with_neg_one);
+                // Check for division by zero
+                let zero = b.ins().iconst(types::I32, 0);
+                let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
 
-            //         // Normal division result
-            //         let div_result = b.ins().sdiv(v1, v2);
+                // Normal division result
+                let div_result = b.ins().udiv(v1, v2);
 
-            //         // Select based on special cases
-            //         let overflow_result = min_int; // For overflow, return MIN_INT
-            //         let zero_result = neg_one; // For div by zero, return -1
+                // For division by zero, return all 1s (UINT_MAX)
+                let max_uint = b.ins().iconst(types::I32, -1_i32 as i64); // 0xFFFFFFFF
 
-            //         let temp_result = b.ins().select(is_overflow, overflow_result, div_result);
-            //         let final_result = b.ins().select(is_zero, zero_result, temp_result);
+                let final_result = b.ins().select(is_zero, max_uint, div_result);
 
-            //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, final_result);
-            //     }
-            //     OpcodeKind::M(raki::MOpcode::DIVU) => {
-            //         // Unsigned division
-            //         let Instruction { rd, rs1, rs2, .. } = inst;
-            //         let (rs1, rs2) = load_two_regs(
-            //             &mut b,
-            //             cpu_ptr,
-            //             &regs,
-            //             &mut regs_read_or_changed_so_far,
-            //             &mut dirty_regs,
-            //             rs1,
-            //             rs2,
-            //         );
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, final_result);
+            }
+            Opcode::REM => {
+                // Signed remainder
+                let (rd, v1, v2) = preload_alu(
+                    &mut b,
+                    register_file_ptr,
+                    &regs,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    inst,
+                );
 
-            //         let v1 = b.use_var(regs[rs1]);
-            //         let v2 = b.use_var(regs[rs2]);
+                // Check for division by zero or special case
+                let zero = b.ins().iconst(types::I32, 0);
+                let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
+                let min_int = b.ins().iconst(types::I32, -2147483648_i32 as i64); // 0x80000000
+                let neg_one = b.ins().iconst(types::I32, -1_i32 as i64);
 
-            //         // Check for division by zero
-            //         let zero = b.ins().iconst(types::I32, 0);
-            //         let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
+                let cmp_with_min = b.ins().icmp(IntCC::Equal, v1, min_int);
+                let cmp_with_neg_one = b.ins().icmp(IntCC::Equal, v2, neg_one);
+                let is_special_case = b.ins().band(cmp_with_min, cmp_with_neg_one);
 
-            //         // Normal division result
-            //         let div_result = b.ins().udiv(v1, v2);
+                // Normal remainder result
+                let rem_result = b.ins().srem(v1, v2);
 
-            //         // For division by zero, return all 1s (UINT_MAX)
-            //         let max_uint = b.ins().iconst(types::I32, -1_i32 as i64); // 0xFFFFFFFF
+                // For div by zero, return the dividend
+                // For special case, return 0
+                let special_result = zero;
 
-            //         let final_result = b.ins().select(is_zero, max_uint, div_result);
+                let temp_result = b.ins().select(is_special_case, special_result, rem_result);
+                let final_result = b.ins().select(is_zero, v1, temp_result);
 
-            //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, final_result);
-            //     }
-            //     OpcodeKind::M(raki::MOpcode::REM) => {
-            //         // Signed remainder
-            //         let Instruction { rd, rs1, rs2, .. } = inst;
-            //         let (rs1, rs2) = load_two_regs(
-            //             &mut b,
-            //             cpu_ptr,
-            //             &regs,
-            //             &mut regs_read_or_changed_so_far,
-            //             &mut dirty_regs,
-            //             rs1,
-            //             rs2,
-            //         );
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, final_result);
+            }
+            Opcode::REMU => {
+                let (rd, v1, v2) = preload_alu(
+                    &mut b,
+                    register_file_ptr,
+                    &regs,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    inst,
+                );
 
-            //         let v1 = b.use_var(regs[rs1]);
-            //         let v2 = b.use_var(regs[rs2]);
+                // Check for division by zero
+                let zero = b.ins().iconst(types::I32, 0);
+                let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
 
-            //         // Check for division by zero or special case
-            //         let zero = b.ins().iconst(types::I32, 0);
-            //         let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
-            //         let min_int = b.ins().iconst(types::I32, -2147483648_i32 as i64); // 0x80000000
-            //         let neg_one = b.ins().iconst(types::I32, -1_i32 as i64);
+                // Normal remainder result
+                let rem_result = b.ins().urem(v1, v2);
 
-            //         let cmp_with_min = b.ins().icmp(IntCC::Equal, v1, min_int);
-            //         let cmp_with_neg_one = b.ins().icmp(IntCC::Equal, v2, neg_one);
-            //         let is_special_case = b.ins().band(cmp_with_min, cmp_with_neg_one);
+                // For div by zero, return the dividend
+                let final_result = b.ins().select(is_zero, v1, rem_result);
 
-            //         // Normal remainder result
-            //         let rem_result = b.ins().srem(v1, v2);
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, final_result);
+            }
+            Opcode::ECALL => {
+                // Placeholder for ECALL as requested
+                // ECALL should be a terminal instruction
+                // store_registers_to_cpu(&mut b, register_file_ptr, &regs, &dirty_regs);
 
-            //         // For div by zero, return the dividend
-            //         // For special case, return 0
-            //         let special_result = zero;
-
-            //         let temp_result = b.ins().select(is_special_case, special_result, rem_result);
-            //         let final_result = b.ins().select(is_zero, v1, temp_result);
-
-            //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, final_result);
-            //     }
-            //     OpcodeKind::M(raki::MOpcode::REMU) => {
-            //         // Unsigned remainder
-            //         let Instruction { rd, rs1, rs2, .. } = inst;
-            //         let (rs1, rs2) = load_two_regs(
-            //             &mut b,
-            //             cpu_ptr,
-            //             &regs,
-            //             &mut regs_read_or_changed_so_far,
-            //             &mut dirty_regs,
-            //             rs1,
-            //             rs2,
-            //         );
-
-            //         let v1 = b.use_var(regs[rs1]);
-            //         let v2 = b.use_var(regs[rs2]);
-
-            //         // Check for division by zero
-            //         let zero = b.ins().iconst(types::I32, 0);
-            //         let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
-
-            //         // Normal remainder result
-            //         let rem_result = b.ins().urem(v1, v2);
-
-            //         // For div by zero, return the dividend
-            //         let final_result = b.ins().select(is_zero, v1, rem_result);
-
-            //         define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, final_result);
-            //     }
-            //     OpcodeKind::BaseI(BaseIOpcode::ECALL) => {
-            //         // Placeholder for ECALL as requested
-            //         // ECALL should be a terminal instruction
-            //         store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
-
-            //         // Return a special value to indicate an ECALL (could be handled by the main loop)
-            //         let ecall_indicator = b.ins().iconst(types::I32, 0xECA11);
-            //         b.ins().return_(&[ecall_indicator]);
-            //         term_was_added = true;
-            //         cnt += 1;
-            //         break;
-            //     }
-            // Opcode::EBREAK => {
+                // Return a special value to indicate an ECALL (could be handled by the main loop)
+                // let ecall_indicator = b.ins().iconst(types::I32, 0xECA11);
+                // let rvals = &[b.ins().iconst(types::I32, pc as i64)];
+                // b.ins().return_(rvals);
+                // term_was_added = true;
+                // cnt += 1;
+                break;
+            }
+            Opcode::EBREAK => {
             //     // Environment break - terminal instruction
             //     store_registers_to_cpu(&mut b, cpu_ptr, &regs, &dirty_regs);
 
@@ -1006,8 +916,8 @@ pub fn compile_tb<'a>(
             //     b.ins().return_(&[ebreak_indicator]);
             //     term_was_added = true;
             //     cnt += 1;
-            //     break;
-            // }
+                break;
+            }
             _ => unreachable!(""),
         }
         pc += 4;
@@ -1895,27 +1805,27 @@ mod tests {
     //         assert_eq!(next_pc, 12, "Next PC should be 12 after execution");
     //     }
 
-    //     #[test]
-    //     fn test_div_instruction() {
-    //         // Define a program with DIV instruction (signed division)
-    //         // 1. Set x10 to -10
-    //         // 2. Set x20 to 3
-    //         // 3. DIV x28, x10, x20 (result: -3)
-    //         let test_program = [
-    //             0x13, 0x05, 0x60, 0xff,     // addi x10, x0, -10
-    //             0x13, 0x0a, 0x30, 0x00,     // addi x20, x0, 3
-    //             0x33, 0x4e, 0x45, 0x03,     // div x28, x10, x20
-    //         ];
+        #[test]
+        fn test_div_instruction() {
+            // Define a program with DIV instruction (signed division)
+            // 1. Set x10 to -10
+            // 2. Set x20 to 3
+            // 3. DIV x28, x10, x20 (result: -3)
+            let test_program = [
+                0x13, 0x05, 0x60, 0xff,     // addi x10, x0, -10
+                0x13, 0x0a, 0x30, 0x00,     // addi x20, x0, 3
+                0x33, 0x4e, 0x45, 0x03,     // div x28, x10, x20
+            ];
 
-    //         let (cpu, _, insns, next_pc) = setup_test_env(&test_program);
+            let (cpu, _, insns, next_pc) = setup_test_env(&test_program);
 
-    //         // -10 / 3 = -3 (truncated toward zero)
-    //         assert_eq!(insns, 3, "Should have translated all 3 instructions");
-    //         assert_eq!(cpu.regs[10] as i32, -10, "Register x10 should be -10");
-    //         assert_eq!(cpu.regs[20], 3, "Register x20 should be 3");
-    //         assert_eq!(cpu.regs[28] as i32, -3, "DIV should perform signed division");
-    //         assert_eq!(next_pc, 12, "Next PC should be 12 after execution");
-    //     }
+            // -10 / 3 = -3 (truncated toward zero)
+            assert_eq!(insns, 3, "Should have translated all 3 instructions");
+            assert_eq!(cpu.regs[10] as i32, -10, "Register x10 should be -10");
+            assert_eq!(cpu.regs[20], 3, "Register x20 should be 3");
+            assert_eq!(cpu.regs[28] as i32, -3, "DIV should perform signed division");
+            assert_eq!(next_pc, 12, "Next PC should be 12 after execution");
+        }
 
     //     #[test]
     //     fn test_divu_instruction() {

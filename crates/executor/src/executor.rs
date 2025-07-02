@@ -1233,21 +1233,30 @@ impl<'a> Executor<'a> {
 
         let done;
         loop {
+            println!("!!!!!!!!!!!!!!!!!!");
             let mode = self.tb_find_or_compile(&mut fast_tb_cache, &mut slow_tb_cache, &mut jit_wrapper);
             if let ExecutionMode::TB(tb) = mode {
-                // println!("executing tb");
+                println!("executing tb");
                 unsafe {
                     let tb_executor: extern "C" fn(*mut Memory, *mut RegisterFile) -> u32 =
                         std::mem::transmute(tb);
-                    tb_executor(&mut self.state.memory_, &mut self.state.register_file);
+                    self.state.pc = tb_executor(&mut self.state.memory_, &mut self.state.register_file);
+                }
+                println!("################res_pc: {}", self.state.pc);
+                if self.state.pc >= done_inv {
+                    done = true;
+                    break;
                 }
             } else {
-                // println!("executing cycle");
+                println!("executing cycle {}", self.state.pc);
+                // TODO remove this
+
                 if self.execute_cycle(done_inv, &mut rng)? {
                     done = true;
                     break;
                 }
             }
+
         }
 
         if done {
