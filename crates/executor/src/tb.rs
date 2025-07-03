@@ -792,26 +792,36 @@ pub fn compile_tb<'a>(
                     &mut dirty_regs,
                     inst,
                 );
-
-                // Check for division by zero
                 let zero = b.ins().iconst(types::I32, 0);
-                let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
-                let min_int = b.ins().iconst(types::I32, -2147483648_i32 as i64); // 0x80000000
                 let neg_one = b.ins().iconst(types::I32, -1_i32 as i64);
+
+                let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
+
+                let overflow_block = b.create_block(); // jumps to cont if overflow
+                let div_block  = b.create_block();    // executes the divide
+                let cont_block = b.create_block();    // join-point, result in a block param
+
+                // Additional block for overflow case
+                // Jump either to div_block or directly to cont_block with −1.
+                b.ins().brif(is_zero, cont_block, &[neg_one], overflow_block, &[]);
+                
+                // ---------- overflow_block ----------
+                b.switch_to_block(overflow_block);
+                let min_int = b.ins().iconst(types::I32, -2147483648_i32 as i64); // 0x80000000
                 let cmp_with_min = b.ins().icmp(IntCC::Equal, v1, min_int);
                 let cmp_with_neg_one = b.ins().icmp(IntCC::Equal, v2, neg_one);
                 let is_overflow = b.ins().band(cmp_with_min, cmp_with_neg_one);
-
-                // Normal division result
-                let div_result = b.ins().sdiv(v1, v2);
-
-                // Select based on special cases
-                let overflow_result = min_int; // For overflow, return MIN_INT
-                let zero_result = neg_one; // For div by zero, return -1
-
-                let temp_result = b.ins().select(is_overflow, overflow_result, div_result);
-                let final_result = b.ins().select(is_zero, zero_result, temp_result);
-
+                b.ins().brif(is_overflow, cont_block, &[min_int], div_block, &[]);
+                
+                // ---------- div_block ----------
+                b.switch_to_block(div_block);
+                let div_res = b.ins().sdiv(v1, v2);
+                b.ins().jump(cont_block, &[div_res]);
+                
+                // ---------- cont_block ----------
+                b.switch_to_block(cont_block);
+                let final_result = b.append_block_param(cont_block, types::I32);
+                
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, final_result);
             }
             Opcode::DIVU => {
@@ -824,19 +834,27 @@ pub fn compile_tb<'a>(
                     &mut dirty_regs,
                     inst,
                 );
-
-                // Check for division by zero
                 let zero = b.ins().iconst(types::I32, 0);
+                let neg_one = b.ins().iconst(types::I32, -1_i32 as i64);
+
                 let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
 
-                // Normal division result
-                let div_result = b.ins().udiv(v1, v2);
+                let div_block  = b.create_block();    // executes the divide
+                let cont_block = b.create_block();    // join-point, result in a block param
 
-                // For division by zero, return all 1s (UINT_MAX)
-                let max_uint = b.ins().iconst(types::I32, -1_i32 as i64); // 0xFFFFFFFF
-
-                let final_result = b.ins().select(is_zero, max_uint, div_result);
-
+                // Additional block for overflow case
+                // Jump either to div_block or directly to cont_block with −1.
+                b.ins().brif(is_zero, cont_block, &[neg_one], div_block, &[]);
+                
+                // ---------- div_block ----------
+                b.switch_to_block(div_block);
+                let div_res = b.ins().udiv(v1, v2);
+                b.ins().jump(cont_block, &[div_res]);
+                
+                // ---------- cont_block ----------
+                b.switch_to_block(cont_block);
+                let final_result = b.append_block_param(cont_block, types::I32);
+                
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, final_result);
             }
             Opcode::REM => {
@@ -849,27 +867,36 @@ pub fn compile_tb<'a>(
                     &mut dirty_regs,
                     inst,
                 );
-
-                // Check for division by zero or special case
                 let zero = b.ins().iconst(types::I32, 0);
-                let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
-                let min_int = b.ins().iconst(types::I32, -2147483648_i32 as i64); // 0x80000000
                 let neg_one = b.ins().iconst(types::I32, -1_i32 as i64);
 
+                let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
+
+                let overflow_block = b.create_block(); // jumps to cont if overflow
+                let div_block  = b.create_block();    // executes the divide
+                let cont_block = b.create_block();    // join-point, result in a block param
+
+                // Additional block for overflow case
+                // Jump either to div_block or directly to cont_block with −1.
+                b.ins().brif(is_zero, cont_block, &[v1], overflow_block, &[]);
+                
+                // ---------- overflow_block ----------
+                b.switch_to_block(overflow_block);
+                let min_int = b.ins().iconst(types::I32, -2147483648_i32 as i64); // 0x80000000
                 let cmp_with_min = b.ins().icmp(IntCC::Equal, v1, min_int);
                 let cmp_with_neg_one = b.ins().icmp(IntCC::Equal, v2, neg_one);
-                let is_special_case = b.ins().band(cmp_with_min, cmp_with_neg_one);
-
-                // Normal remainder result
-                let rem_result = b.ins().srem(v1, v2);
-
-                // For div by zero, return the dividend
-                // For special case, return 0
-                let special_result = zero;
-
-                let temp_result = b.ins().select(is_special_case, special_result, rem_result);
-                let final_result = b.ins().select(is_zero, v1, temp_result);
-
+                let is_overflow = b.ins().band(cmp_with_min, cmp_with_neg_one);
+                b.ins().brif(is_overflow, cont_block, &[zero], div_block, &[]);
+                
+                // ---------- div_block ----------
+                b.switch_to_block(div_block);
+                let div_res = b.ins().srem(v1, v2);
+                b.ins().jump(cont_block, &[div_res]);
+                
+                // ---------- cont_block ----------
+                b.switch_to_block(cont_block);
+                let final_result = b.append_block_param(cont_block, types::I32);
+                
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, final_result);
             }
             Opcode::REMU => {
@@ -881,17 +908,34 @@ pub fn compile_tb<'a>(
                     &mut dirty_regs,
                     inst,
                 );
-
-                // Check for division by zero
                 let zero = b.ins().iconst(types::I32, 0);
+
                 let is_zero = b.ins().icmp(IntCC::Equal, v2, zero);
 
-                // Normal remainder result
-                let rem_result = b.ins().urem(v1, v2);
+                let div_block  = b.create_block();    // executes the divide
+                let cont_block = b.create_block();    // join-point, result in a block param
 
-                // For div by zero, return the dividend
-                let final_result = b.ins().select(is_zero, v1, rem_result);
-
+                // Additional block for overflow case
+                // Jump either to div_block or directly to cont_block with −1.
+                b.ins().brif(is_zero, cont_block, &[v1], div_block, &[]);
+                
+                // ---------- overflow_block ----------
+                // b.switch_to_block(overflow_block);
+                // let min_int = b.ins().iconst(types::I32, -2147483648_i32 as i64); // 0x80000000
+                // let cmp_with_min = b.ins().icmp(IntCC::Equal, v1, min_int);
+                // let cmp_with_neg_one = b.ins().icmp(IntCC::Equal, v2, neg_one);
+                // let is_overflow = b.ins().band(cmp_with_min, cmp_with_neg_one);
+                // b.ins().brif(is_overflow, cont_block, &[zero], div_block, &[]);
+                
+                // ---------- div_block ----------
+                b.switch_to_block(div_block);
+                let div_res = b.ins().urem(v1, v2);
+                b.ins().jump(cont_block, &[div_res]);
+                
+                // ---------- cont_block ----------
+                b.switch_to_block(cont_block);
+                let final_result = b.append_block_param(cont_block, types::I32);
+                
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, final_result);
             }
             Opcode::ECALL => {
@@ -1807,84 +1851,89 @@ mod tests {
 
         #[test]
         fn test_div_instruction() {
-            // Define a program with DIV instruction (signed division)
-            // 1. Set x10 to -10
-            // 2. Set x20 to 3
-            // 3. DIV x28, x10, x20 (result: -3)
-            let test_program = [
-                0x13, 0x05, 0x60, 0xff,     // addi x10, x0, -10
-                0x13, 0x0a, 0x30, 0x00,     // addi x20, x0, 3
-                0x33, 0x4e, 0x45, 0x03,     // div x28, x10, x20
+            // main:
+            //     addi x10, x0, -10
+            //     addi x20, x0, 3
+            //     div  x28, x10, x20     # -10 / 3 = -3
+            let instructions = vec![
+                // addi x10, x0, -10
+                Instruction::new(Opcode::ADD, 10, 0, (-10i32) as u32, false, true),
+                // addi x20, x0, 3
+                Instruction::new(Opcode::ADD, 20, 0, 3, false, true),
+                // div x28, x10, x20
+                Instruction::new(Opcode::DIV, 28, 10, 20, false, false),
             ];
 
-            let (cpu, _, insns, next_pc) = setup_test_env(&test_program);
+            let program = Program::new(instructions, 0, 0);
+            let mut runtime = Executor::new(program);
+            let (insns, next_pc) = setup_test_env_with_cpu(&mut runtime);
 
             // -10 / 3 = -3 (truncated toward zero)
             assert_eq!(insns, 3, "Should have translated all 3 instructions");
-            assert_eq!(cpu.regs[10] as i32, -10, "Register x10 should be -10");
-            assert_eq!(cpu.regs[20], 3, "Register x20 should be 3");
-            assert_eq!(cpu.regs[28] as i32, -3, "DIV should perform signed division");
+            assert_eq!(runtime.register(Register::X10) as i32, -10, "Register x10 should be -10");
+            assert_eq!(runtime.register(Register::X20), 3, "Register x20 should be 3");
+            assert_eq!(runtime.register(Register::X28) as i32, -3, "DIV should perform signed division");
             assert_eq!(next_pc, 12, "Next PC should be 12 after execution");
         }
 
-    //     #[test]
-    //     fn test_divu_instruction() {
-    //         // Define a program with DIVU instruction (unsigned division)
-    //         // 1. Set x10 to -1 (0xFFFFFFFF unsigned)
-    //         // 2. Set x20 to 10
-    //         // 3. DIVU x28, x10, x20
-    //         let test_program = [
-    //             0x13, 0x05, 0xf0, 0xff,     // addi x10, x0, -1 (0xFFFFFFFF unsigned)
-    //             0x13, 0x0a, 0xa0, 0x00,     // addi x20, x0, 10
-    //             0x33, 0x5e, 0x45, 0x03,     // divu x28, x10, x20
-    //         ];
+            // #[test]
+            // fn test_divu_instruction() {
+            //     // Define a program with DIVU instruction (unsigned division)
+            //     // 1. Set x10 to -1 (0xFFFFFFFF unsigned)
+            //     // 2. Set x20 to 10
+            //     // 3. DIVU x28, x10, x20
+            //     let test_program = [
+            //         0x13, 0x05, 0xf0, 0xff,     // addi x10, x0, -1 (0xFFFFFFFF unsigned)
+            //         0x13, 0x0a, 0xa0, 0x00,     // addi x20, x0, 10
+            //         0x33, 0x5e, 0x45, 0x03,     // divu x28, x10, x20
+            //     ];
 
-    //         let (cpu, _, insns, next_pc) = setup_test_env(&test_program);
+            //     // let (cpu, _, insns, next_pc) = setup_test_env(&test_program);
 
-    //         // 0xFFFFFFFF / 10 = 429496729 (unsigned)
-    //         assert_eq!(cpu.regs[28], 429496729, "DIVU should perform unsigned division");
-    //     }
+            //     // 0xFFFFFFFF / 10 = 429496729 (unsigned)
+            //     assert_eq!(cpu.regs[28], 429496729, "DIVU should perform unsigned division");
+            // }
 
-    //     #[test]
-    //     fn test_rem_instruction() {
-    //         // Define a program with REM instruction (signed remainder)
-    //         // 1. Set x10 to -10
-    //         // 2. Set x20 to 3
-    //         // 3. REM x28, x10, x20 (result: -1)
-    //         let test_program = [
-    //             0x13, 0x05, 0x60, 0xff,     // addi x10, x0, -10
-    //             0x13, 0x0a, 0x30, 0x00,     // addi x20, x0, 3
-    //             0x33, 0x6e, 0x45, 0x03,     // rem x28, x10, x20
-    //         ];
+            // #[test]
+            // fn test_rem_instruction() {
+            //     // Define a program with REM instruction (signed remainder)
+            //     // 1. Set x10 to -10
+            //     // 2. Set x20 to 3
+            //     // 3. REM x28, x10, x20 (result: -1)
+            //     let test_program = [
+            //         0x13, 0x05, 0x60, 0xff,     // addi x10, x0, -10
+            //         0x13, 0x0a, 0x30, 0x00,     // addi x20, x0, 3
+            //         0x33, 0x6e, 0x45, 0x03,     // rem x28, x10, x20
+            //     ];
 
-    //         let (cpu, _, insns, next_pc) = setup_test_env(&test_program);
+            //     // let (cpu, _, insns, next_pc) = setup_test_env(&test_program);
 
-    //         // -10 % 3 = -1
-    //         assert_eq!(cpu.regs[28] as i32, -1, "REM should perform signed remainder");
-    //         assert_eq!(insns, 3, "Should have translated all 3 instructions");
-    //         assert_eq!(next_pc, 12, "Next PC should be 12 after execution");
-    //     }
+            //     // -10 % 3 = -1
+            //     assert_eq!(cpu.regs[28] as i32, -1, "REM should perform signed remainder");
+            //     assert_eq!(insns, 3, "Should have translated all 3 instructions");
+            //     assert_eq!(next_pc, 12, "Next PC should be 12 after execution");
+            // }
 
-    //     #[test]
-    //     fn test_remu_instruction() {
-    //         // Define a program with REMU instruction (unsigned remainder)        // 1. Set x10 to -1 (0xFFFFFFFF unsigned)
-    //         // 2. Set x20 to 10
-    //         // 3. REMU x28, x10, x20
-    //         let test_program = [
-    //             0x13, 0x05, 0xf0, 0xff,     // addi x10, x0, -1 (0xFFFFFFFF unsigned)
-    //             0x13, 0x0a, 0xa0, 0x00,     // addi x20, x0, 10
-    //             0x33, 0x7e, 0x45, 0x03,     // remu x28, x10, x20
-    //         ];
+            // #[test]
+            // fn test_remu_instruction() {
+            //     // Define a program with REMU instruction (unsigned remainder)        // 1. Set x10 to -1 (0xFFFFFFFF unsigned)
+            //     // 2. Set x20 to 10
+            //     // 3. REMU x28, x10, x20
+            //     let test_program = [
+            //         0x13, 0x05, 0xf0, 0xff,     // addi x10, x0, -1 (0xFFFFFFFF unsigned)
+            //         0x13, 0x0a, 0xa0, 0x00,     // addi x20, x0, 10
+            //         0x33, 0x7e, 0x45, 0x03,     // remu x28, x10, x20
+            //     ];
 
-    //         let (cpu, _, insns, next_pc) = setup_test_env(&test_program);
+            //     // let (cpu, _, insns, next_pc) = setup_test_env(&test_program);
 
-    //         // 0xFFFFFFFF % 10 = 5 (unsigned)
-    //         assert_eq!(insns, 3, "Should have translated all 3 instructions");
-    //         assert_eq!(cpu.regs[10] as i32, -1, "Register x10 should be 0xFFFFFFFF");
-    //         assert_eq!(cpu.regs[20], 10, "Register x20 should be 10");
-    //         assert_eq!(cpu.regs[28], 5, "REMU should perform unsigned remainder");
-    //         assert_eq!(next_pc, 12, "Next PC should be 12 after execution");
-    //     }
+            //     // 0xFFFFFFFF % 10 = 5 (unsigned)
+            //     assert_eq!(insns, 3, "Should have translated all 3 instructions");
+            //     assert_eq!(cpu.regs[10] as i32, -1, "Register x10 should be 0xFFFFFFFF");
+            //     assert_eq!(cpu.regs[20], 10, "Register x20 should be 10");
+            //     assert_eq!(cpu.regs[28], 5, "REMU should perform unsigned remainder");
+            //     assert_eq!(next_pc, 12, "Next PC should be 12 after execution");
+            // }
 
     //     #[test]
     //     fn test_ecall_instruction() {
