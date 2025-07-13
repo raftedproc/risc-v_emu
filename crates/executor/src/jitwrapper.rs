@@ -1,6 +1,8 @@
 use std::ops::{Index, IndexMut};
 
+use cranelift_codegen::ir::{types, AbiParam};
 use cranelift_jit::{JITBuilder, JITModule};
+use cranelift_module::{FuncId, Linkage, Module};
 
 use crate::memory::{mem_load32, mem_store32};
 
@@ -21,10 +23,37 @@ impl Default for TBCacheEntry {
   }
 }
 
+/// JITModule external imports
+pub struct JITHelpers {
+  pub mem_load32: FuncId,
+  pub mem_store32: FuncId,
+}
+
+impl JITHelpers {
+    pub fn new(jit: &mut JITModule) -> Self {
+      let mut mem_load32_sig = jit.make_signature();
+      mem_load32_sig.params.push(AbiParam::new(types::I64));
+      mem_load32_sig.params.push(AbiParam::new(types::I32));
+      mem_load32_sig.returns.push(AbiParam::new(types::I32));
+      
+      let mut mem_store32_sig = jit.make_signature();
+      mem_store32_sig.params.push(AbiParam::new(types::I64));
+      mem_store32_sig.params.push(AbiParam::new(types::I32));
+      mem_store32_sig.params.push(AbiParam::new(types::I32));
+
+        Self {
+            mem_load32: jit.declare_function("mem_load32", Linkage::Import, &mut mem_load32_sig).expect("Failed to declare function"),
+            mem_store32: jit.declare_function("mem_store32", Linkage::Import, &mut mem_store32_sig).expect("Failed to declare function"),
+        }
+    }
+}
+
 /// State JITWrapper to store module
 pub struct JITWrapper {
   /// Common JITModule
   pub jit: JITModule,
+
+  pub helpers: JITHelpers,
 }
 
 pub struct TBCache<const S: usize>([Option<TBCacheEntry>; S]);
@@ -64,9 +93,13 @@ impl Default for JITWrapper {
       builder.symbol("mem_load32",  mem_load32 as *const u8);
       builder.symbol("mem_store32", mem_store32 as *const u8);
   
-      let jit = JITModule::new(builder);
+      let mut jit = JITModule::new(builder);
+
+      let helpers = JITHelpers::new(&mut jit);
+
       Self {
           jit,
+          helpers,
       }
   }
 }

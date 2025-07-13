@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
 };
 
+use cranelift_module::Module;
 use frand::Rand;
 // use hashbrown::{hash_map::Entry, HashMap};
 use hashbrown::HashMap;
@@ -18,7 +19,8 @@ use crate::{
     },
     hook::{HookEnv, HookRegistry},
     jitwrapper::{
-        FastTBCache, JITWrapper, SlowTBCache, TBCache, TBCacheEntry, FAST_CACHE_MASK, SLOW_CACHE_MASK
+        FastTBCache, JITWrapper, SlowTBCache, TBCache, TBCacheEntry, FAST_CACHE_MASK,
+        SLOW_CACHE_MASK,
     },
     memory::Memory,
     state::{ExecutionState, ForkState},
@@ -420,6 +422,7 @@ impl<'a> Executor<'a> {
     ) -> MemoryWriteRecord {
         // Get the memory record entry.
         // let entry = self.state.memory.entry(addr);
+        // println!("mw size {} addr {} val {}", self.state.memory_.memory.len(), addr, value);
         self.state.memory_[addr] = value;
         // let mem_value = self.state.memory_[addr];
 
@@ -846,6 +849,8 @@ impl<'a> Executor<'a> {
                 let (rd, imm) = instruction.u_type();
                 (b, _) = (imm, imm);
                 a = self.state.pc.wrapping_add(b);
+                // println!("AUIPC pc {} b {} res {}", self.state.pc, b, a);
+
                 self.rw(rd, a);
             }
 
@@ -1204,14 +1209,16 @@ impl<'a> Executor<'a> {
         slow_tb_cache: &mut SlowTBCache,
         jit_wrapper: &mut JITWrapper,
     ) -> ExecutionMode {
-        if let Some(tb) = tb_fast_cache_lookup(self.state.pc, self.unconstrained, fast_tb_cache) {
-            return ExecutionMode::TB(tb);
-        }
+        // return ExecutionMode::Emulator;
 
-        if let Some(tb) = tb_slow_cache_lookup(self.state.pc, self.unconstrained, slow_tb_cache) {
-            populate_fast_cache(self.state.pc, self.unconstrained, tb, fast_tb_cache);
-            return ExecutionMode::TB(tb);
-        }
+        // if let Some(tb) = tb_fast_cache_lookup(self.state.pc, self.unconstrained, fast_tb_cache) {
+        //     return ExecutionMode::TB(tb);
+        // }
+
+        // if let Some(tb) = tb_slow_cache_lookup(self.state.pc, self.unconstrained, slow_tb_cache) {
+        //     populate_fast_cache(self.state.pc, self.unconstrained, tb, fast_tb_cache);
+        //     return ExecutionMode::TB(tb);
+        // }
 
         let executor = self;
         try_to_compile_tb_and_populate_slow_cache(executor, jit_wrapper, slow_tb_cache)
@@ -1234,19 +1241,24 @@ impl<'a> Executor<'a> {
 
         let mut done = false;
         loop {
-        // while self.state.global_clk < 10 {
-            println!("!!!!!!!!!!!!!!!!!!");
-            let mode = self.tb_find_or_compile(&mut fast_tb_cache, &mut slow_tb_cache, &mut jit_wrapper);
+        // while self.state.global_clk < 300 {
+            // println!("!!!!!!!!!!!!!!!!!!");
+            let mode =
+                self.tb_find_or_compile(&mut fast_tb_cache, &mut slow_tb_cache, &mut jit_wrapper);
             if let ExecutionMode::TB(tb) = mode {
-                println!("executing tb");
+                // println!("executing tb");
                 unsafe {
                     let tb_executor: extern "C" fn(*mut Memory, *mut RegisterFile) -> u32 =
                         std::mem::transmute(tb);
-                    self.state.pc = tb_executor(&mut self.state.memory_, &mut self.state.register_file);
+                    self.state.pc =
+                        tb_executor(&mut self.state.memory_, &mut self.state.register_file);
                 }
-                println!("################res_pc: {}", self.state.pc);
-                if self.state.pc >= done_inv {
-                    done = true;
+                // println!("################res_pc: {}", self.state.pc);
+                // println!("################res_pc: {:?}", self.state.register_file);
+                let done = self.state.pc == 0
+                    || self.state.pc.wrapping_sub(self.program.pc_base) >= done_inv;
+                if done {
+                    // println!("################ is done: {} {}", self.state.pc, done_inv);
                     break;
                 }
             } else {
@@ -1257,7 +1269,13 @@ impl<'a> Executor<'a> {
                     done = true;
                     break;
                 }
+                // println!("################res_pc: {:?}", self.state.register_file);
             }
+
+            if self.state.global_clk % 100000 == 0 {
+                println!("after the loop {:?}",  jit_wrapper.jit.declarations());
+            }
+
         }
 
         if done {

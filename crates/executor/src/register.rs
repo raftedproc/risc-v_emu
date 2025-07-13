@@ -262,7 +262,7 @@ pub fn store_registers_to_cpu(
             continue;
         }
         let reg_val = b.use_var(regs[i]);
-        println!("Register {}: retrieved value = {:?}", i, reg_val);
+        // println!("R egister {}: retrieved value = {:?}", i, reg_val);
         let off = (i * 4) as i64;
 
         // Calculate pointer to CPU's regs[i]
@@ -270,6 +270,6 @@ pub fn store_registers_to_cpu(
 
         // Store the register value back to CPU memory
         b.ins().store(MemFlags::new(), reg_val, addr, 0);
-        println!("Stored reg {} value back to CPU at offset {}", i, off);
+        // println!("Stored reg {} value back to CPU at offset {}", i, off);
     }
 }

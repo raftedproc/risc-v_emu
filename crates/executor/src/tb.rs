@@ -2,7 +2,7 @@ use std::{ops::Shl, ptr::null};
 
 use crate::{
     jitwrapper::{TBCacheEntry, SLOW_CACHE_MASK},
-    memory::call_mem_store,
+    memory::{call_mem_load_, call_mem_store_},
     store_registers_to_cpu, Opcode,
 };
 use cranelift_codegen::ir::{condcodes::IntCC, *};
@@ -16,7 +16,6 @@ use crate::{
     define_rd_and_mark_dirty,
     jitwrapper::{JITWrapper, SlowTBCache},
     load_reg_if_needed_and_not_dirty, load_two_regs,
-    memory::call_mem_load,
     register, ExecutionMode, ExecutionState, Executor, Instruction,
 };
 
@@ -41,15 +40,25 @@ pub fn try_to_compile_tb_and_populate_slow_cache<'a>(
     jit_wrapper: &mut JITWrapper,
     slow_tb_cache: &mut SlowTBCache,
 ) -> ExecutionMode {
-    let (tb_ptr, insns_compiled) = compile_tb(executor, jit_wrapper, 256);
+    let (tb_ptr, insns_compiled) = compile_tb(executor, jit_wrapper, 16);
+
+    // WIP this must be refactored  
+    if tb_ptr == std::ptr::null() && insns_compiled == 0 {
+        println!("rotate module");
+        // println!("before the cleanup {:?}",  jit_wrapper.jit.declarations());
+        *jit_wrapper = JITWrapper::default();
+        println!("after the cleanup {:?}",  jit_wrapper.jit.declarations());
+
+        return ExecutionMode::Emulator;
+    }
 
     if insns_compiled > 0 {
-        populate_slow_cache(
-            executor.state.pc,
-            executor.unconstrained,
-            tb_ptr,
-            slow_tb_cache,
-        );
+        // populate_slow_cache(
+        //     executor.state.pc,
+        //     executor.unconstrained,
+        //     tb_ptr,
+        //     slow_tb_cache,
+        // );
         ExecutionMode::TB(tb_ptr)
     } else {
         ExecutionMode::Emulator
@@ -58,12 +67,12 @@ pub fn try_to_compile_tb_and_populate_slow_cache<'a>(
 
 pub fn compile_tb<'a>(
     executor: &mut Executor<'a>,
-    /*state: &mut ExecutionState,*/ jit_wrapper: &mut JITWrapper,
+    jit_wrapper: &mut JITWrapper,
     max_insns: usize,
 ) -> (*const u8, usize) {
-    let jit = &mut jit_wrapper.jit;
+    // let jit = &mut jit_wrapper.jit;
 
-    let mut ctx = jit.make_context();
+    let mut ctx = jit_wrapper.jit.make_context();
     ctx.func.signature.params.push(AbiParam::new(types::I64)); // *mut Memory
     ctx.func.signature.params.push(AbiParam::new(types::I64)); // *mut Registers
     ctx.func.signature.returns.push(AbiParam::new(types::I32)); // next PC
@@ -93,9 +102,9 @@ pub fn compile_tb<'a>(
     let mut cnt = 0;
     let mut term_was_added = false;
     while cnt < max_insns && cnt < executor.program.instructions.len() {
-        println!("cnt: {} pc {}", cnt, pc);
+        // println!("cnt: {} pc {}", cnt, pc);
         let inst = executor.fetch_at(pc);
-        println!("{:?}", inst);
+        println!("pc {} {:?}", pc, inst);
         match inst.opcode {
             Opcode::ADD => {
                 let (rd, v1, v2) = preload_alu(
@@ -245,103 +254,107 @@ pub fn compile_tb<'a>(
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
             }
             Opcode::LB => {
-                let (rd, rs1, imm) = inst.i_type();
-                let reg_idx = rs1 as usize;
-                let op_b = load_reg_if_needed_and_not_dirty(
-                    &mut b,
-                    register_file_ptr,
-                    reg_idx,
-                    &mut regs_read_or_changed_so_far,
-                    &mut dirty_regs,
-                    &regs,
-                );
+                // let (rd, rs1, imm) = inst.i_type();
+                // let reg_idx = rs1 as usize;
+                // let op_b = load_reg_if_needed_and_not_dirty(
+                //     &mut b,
+                //     register_file_ptr,
+                //     reg_idx,
+                //     &mut regs_read_or_changed_so_far,
+                //     &mut dirty_regs,
+                //     &regs,
+                // );
 
-                let base = b.use_var(regs[op_b]);
-                let imm = imm as i64;
-                let addr = b.ins().iadd_imm(base, imm);
+                // let base = b.use_var(regs[op_b]);
+                // let imm = imm as i64;
+                // let addr = b.ins().iadd_imm(base, imm);
 
-                // Call load32 (we don't have separate load8)
-                let val = call_mem_load(jit, &mut b, memory_ptr, addr);
+                // // Call load32 (we don't have separate load8)
+                // let val = call_mem_load(jit, &mut b, memory_ptr, addr);
 
-                // Extract the byte and sign-extend it to 32 bits
-                let shift_amount = b.ins().iconst(types::I32, 24);
-                let byte_val = b.ins().ishl(val, shift_amount);
-                let signed_val = b.ins().sshr(byte_val, shift_amount);
+                // // Extract the byte and sign-extend it to 32 bits
+                // let shift_amount = b.ins().iconst(types::I32, 24);
+                // let byte_val = b.ins().ishl(val, shift_amount);
+                // let signed_val = b.ins().sshr(byte_val, shift_amount);
 
-                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, signed_val);
+                // define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, signed_val);
+                break;
             }
             Opcode::LBU => {
-                let (rd, rs1, imm) = inst.i_type();
-                let rs1 = load_reg_if_needed_and_not_dirty(
-                    &mut b,
-                    register_file_ptr,
-                    rs1 as usize,
-                    &mut regs_read_or_changed_so_far,
-                    &mut dirty_regs,
-                    &regs,
-                );
+                // let (rd, rs1, imm) = inst.i_type();
+                // let rs1 = load_reg_if_needed_and_not_dirty(
+                //     &mut b,
+                //     register_file_ptr,
+                //     rs1 as usize,
+                //     &mut regs_read_or_changed_so_far,
+                //     &mut dirty_regs,
+                //     &regs,
+                // );
 
-                let base = b.use_var(regs[rs1]);
-                let imm = imm as i64;
-                let addr = b.ins().iadd_imm(base, imm);
+                // let base = b.use_var(regs[rs1]);
+                // let imm = imm as i64;
+                // let addr = b.ins().iadd_imm(base, imm);
 
-                // Call load32 (we don't have separate load8)
-                let val = call_mem_load(jit, &mut b, memory_ptr, addr);
+                // // Call load32 (we don't have separate load8)
+                // let val = call_mem_load(jit, &mut b, memory_ptr, addr);
 
-                // Extract the byte (unsigned)
-                let mask = b.ins().iconst(types::I32, 0xFF);
-                let unsigned_val = b.ins().band(val, mask);
+                // // Extract the byte (unsigned)
+                // let mask = b.ins().iconst(types::I32, 0xFF);
+                // let unsigned_val = b.ins().band(val, mask);
 
-                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, unsigned_val);
+                // define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, unsigned_val);
+                break;
             }
             Opcode::LH => {
-                let (rd, rs1, imm) = inst.i_type();
-                let rs1 = load_reg_if_needed_and_not_dirty(
-                    &mut b,
-                    register_file_ptr,
-                    rs1 as usize,
-                    &mut regs_read_or_changed_so_far,
-                    &mut dirty_regs,
-                    &regs,
-                );
+                // let (rd, rs1, imm) = inst.i_type();
+                // let rs1 = load_reg_if_needed_and_not_dirty(
+                //     &mut b,
+                //     register_file_ptr,
+                //     rs1 as usize,
+                //     &mut regs_read_or_changed_so_far,
+                //     &mut dirty_regs,
+                //     &regs,
+                // );
 
-                let base = b.use_var(regs[rs1]);
-                let imm = imm as i64;
-                let addr = b.ins().iadd_imm(base, imm);
+                // let base = b.use_var(regs[rs1]);
+                // let imm = imm as i64;
+                // let addr = b.ins().iadd_imm(base, imm);
 
-                // Call load32 (we don't have separate load16)
-                let val = call_mem_load(jit, &mut b, memory_ptr, addr);
+                // // Call load32 (we don't have separate load16)
+                // let val = call_mem_load(jit, &mut b, memory_ptr, addr);
 
-                // Extract the halfword and sign-extend it to 32 bits
-                let shift_amount = b.ins().iconst(types::I32, 16);
-                let hw_val = b.ins().ishl(val, shift_amount);
-                let signed_val = b.ins().sshr(hw_val, shift_amount);
+                // // Extract the halfword and sign-extend it to 32 bits
+                // let shift_amount = b.ins().iconst(types::I32, 16);
+                // let hw_val = b.ins().ishl(val, shift_amount);
+                // let signed_val = b.ins().sshr(hw_val, shift_amount);
 
-                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, signed_val);
+                // define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, signed_val);
+                break;
             }
             Opcode::LHU => {
-                let (rd, rs1, imm) = inst.i_type();
-                let rs1 = load_reg_if_needed_and_not_dirty(
-                    &mut b,
-                    register_file_ptr,
-                    rs1 as usize,
-                    &mut regs_read_or_changed_so_far,
-                    &mut dirty_regs,
-                    &regs,
-                );
+                // let (rd, rs1, imm) = inst.i_type();
+                // let rs1 = load_reg_if_needed_and_not_dirty(
+                //     &mut b,
+                //     register_file_ptr,
+                //     rs1 as usize,
+                //     &mut regs_read_or_changed_so_far,
+                //     &mut dirty_regs,
+                //     &regs,
+                // );
 
-                let base = b.use_var(regs[rs1]);
-                let imm = imm as i64;
-                let addr = b.ins().iadd_imm(base, imm);
+                // let base = b.use_var(regs[rs1]);
+                // let imm = imm as i64;
+                // let addr = b.ins().iadd_imm(base, imm);
 
-                // Call load32 (we don't have separate load16)
-                let val = call_mem_load(jit, &mut b, memory_ptr, addr);
+                // // Call load32 (we don't have separate load16)
+                // let val = call_mem_load(jit, &mut b, memory_ptr, addr);
 
-                // Extract the halfword (unsigned)
-                let mask = b.ins().iconst(types::I32, 0xFFFF);
-                let unsigned_val = b.ins().band(val, mask);
+                // // Extract the halfword (unsigned)
+                // let mask = b.ins().iconst(types::I32, 0xFFFF);
+                // let unsigned_val = b.ins().band(val, mask);
 
-                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, unsigned_val);
+                // define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, unsigned_val);
+                break;
             }
             Opcode::LW => {
                 let (rd, rs1, imm) = inst.i_type();
@@ -357,47 +370,49 @@ pub fn compile_tb<'a>(
                 let base = b.use_var(regs[rs1]);
                 let addr = b.ins().iadd_imm(base, imm as i64);
 
-                let val = call_mem_load(jit, &mut b, memory_ptr, addr);
+                let val = call_mem_load_(jit_wrapper, &mut b, memory_ptr, addr);
 
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, val);
             }
             Opcode::SB => {
-                let (rs1, rs2, imm) = inst.s_type();
-                // let Instruction { rs2, rs1, imm, .. } = inst;
-                let (rs1, rs2) = load_two_regs(
-                    &mut b,
-                    register_file_ptr,
-                    &regs,
-                    &mut regs_read_or_changed_so_far,
-                    &mut dirty_regs,
-                    rs1 as u32,
-                    rs2 as u32,
-                );
+                // let (rs1, rs2, imm) = inst.s_type();
+                // // let Instruction { rs2, rs1, imm, .. } = inst;
+                // let (rs1, rs2) = load_two_regs(
+                //     &mut b,
+                //     register_file_ptr,
+                //     &regs,
+                //     &mut regs_read_or_changed_so_far,
+                //     &mut dirty_regs,
+                //     rs1 as u32,
+                //     rs2 as u32,
+                // );
 
-                let base = b.use_var(regs[rs1]);
-                let imm = imm as i64;
-                let addr = b.ins().iadd_imm(base, imm);
-                let val = b.use_var(regs[rs2]);
+                // let base = b.use_var(regs[rs2]);
+                // let imm = imm as i64;
+                // let addr = b.ins().iadd_imm(base, imm);
+                // let val = b.use_var(regs[rs1]);
 
-                call_mem_store(jit, &mut b, memory_ptr, addr, val);
+                // call_mem_store(jit, &mut b, memory_ptr, addr, val);
+                break;
             }
             Opcode::SH => {
-                let (rs1, rs2, imm) = inst.s_type();
-                let (rs1, rs2) = load_two_regs(
-                    &mut b,
-                    register_file_ptr,
-                    &regs,
-                    &mut regs_read_or_changed_so_far,
-                    &mut dirty_regs,
-                    rs1 as u32,
-                    rs2 as u32,
-                );
+                // let (rs1, rs2, imm) = inst.s_type();
+                // let (rs1, rs2) = load_two_regs(
+                //     &mut b,
+                //     register_file_ptr,
+                //     &regs,
+                //     &mut regs_read_or_changed_so_far,
+                //     &mut dirty_regs,
+                //     rs1 as u32,
+                //     rs2 as u32,
+                // );
 
-                let base = b.use_var(regs[rs1]);
-                let addr = b.ins().iadd_imm(base, imm as i64);
-                let val = b.use_var(regs[rs2]);
+                // let base = b.use_var(regs[rs2]);
+                // let addr = b.ins().iadd_imm(base, imm as i64);
+                // let val = b.use_var(regs[rs1]);
 
-                call_mem_store(jit, &mut b, memory_ptr, addr, val);
+                // call_mem_store(jit, &mut b, memory_ptr, addr, val);
+                break;
             }
             Opcode::SW => {
                 let (rs1, rs2, imm) = inst.s_type();
@@ -411,12 +426,12 @@ pub fn compile_tb<'a>(
                     rs2 as u32,
                 );
 
-                let base = b.use_var(regs[rs1]);
+                let base = b.use_var(regs[rs2]);
                 let imm = imm as i64;
                 let addr = b.ins().iadd_imm(base, imm);
-                let val = b.use_var(regs[rs2]);
+                let val = b.use_var(regs[rs1]);
 
-                call_mem_store(jit, &mut b, memory_ptr, addr, val);
+                call_mem_store_(jit_wrapper, &mut b, memory_ptr, addr, val);
             }
             Opcode::JAL => {
                 // Jump and link - terminal instruction
@@ -689,8 +704,8 @@ pub fn compile_tb<'a>(
                 // Add Upper Immediate to PC
                 let (rd, imm) = inst.u_type();
                 let rd = rd as u32;
-                let shifted_imm: i64 = (imm as i64) << 12;
-                let result = b.ins().iconst(types::I32, (pc as i64) + (shifted_imm));
+                // let imm: i64 = (imm as i64) << 12;
+                let result = b.ins().iconst(types::I32, (pc as i64) + (imm as i64));
 
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, result);
             }
@@ -968,10 +983,10 @@ pub fn compile_tb<'a>(
         cnt += 1;
     }
 
-    println!("compile_tb ########### cnt: {}", cnt);
+    // println!("compile_tb ########### cnt: {}", cnt);
     // return next PC if we reached the limit or if there was no terminal instruction
     if !term_was_added || (!term_was_added && cnt == max_insns) {
-        println!("compile_tb 11111 cnt: {}", cnt);
+        // println!("compile_tb 11111 cnt: {}", cnt);
         store_registers_to_cpu(&mut b, register_file_ptr, &regs, &dirty_regs);
         let rvals = &[b.ins().iconst(types::I32, pc as i64)];
         b.ins().return_(rvals);
@@ -982,16 +997,23 @@ pub fn compile_tb<'a>(
     let sign = b.func.signature.clone();
     b.finalize();
 
-    println!("{}", ctx.func.display());
+    // println!("{}", ctx.func.display());
 
-    let id = jit.declare_anonymous_function(&sign).unwrap();
-    jit.define_function(id, &mut ctx).unwrap();
+    let id = jit_wrapper.jit.declare_anonymous_function(&sign).unwrap();
+    jit_wrapper.jit.define_function(id, &mut ctx).unwrap();
 
     // println!("{}", ctx.func.display());
 
-    jit.clear_context(&mut ctx);
-    jit.finalize_definitions().expect("must be ok");
-    (jit.get_finalized_function(id), cnt)
+    jit_wrapper.jit.clear_context(&mut ctx);
+    // jit.finalize_definitions().expect("must be ok");
+    match jit_wrapper.jit.finalize_definitions() {
+        Ok(_) => {},
+        Err(e) => {
+            println!("Error finalizing definitions: {}", e);
+            return (std::ptr::null(), 0);
+        }
+    };
+    (jit_wrapper.jit.get_finalized_function(id), cnt)
 }
 
 fn preload_alu(
@@ -1077,39 +1099,11 @@ fn preload_for_bin_op(
     (v1, v2)
 }
 
-// pub fn compile_addi(
-//     b: &mut FunctionBuilder,
-//     register_file_ptr: Value,
-//     regs_read_or_changed_so_far: &mut [bool; 32],
-//     dirty_regs: &mut [bool; 32],
-//     regs: &[Variable; 32],
-//     rs1: u32,
-//     imm: u32,
-//     rd: u32,
-// ) {
-//     let rs1 = load_reg_if_needed_and_not_dirty(
-//         b,
-//         register_file_ptr,
-//         rs1.try_into().unwrap(),
-//         regs_read_or_changed_so_far,
-//         dirty_regs,
-//         regs,
-//     );
-
-//     let v1 = b.use_var(regs[rs1]);
-//     let imm: i64 = imm.try_into().unwrap();
-//     let r = b.ins().iadd_imm(v1, imm);
-
-//     define_rd_and_mark_dirty(b, &regs, dirty_regs, rd.try_into().unwrap(), r);
-// }
-
-// pub fn alu_preload(
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        memory::{mem_load32, mem_store32, Memory},
+        memory::Memory,
         Program, Register, RegisterFile,
     };
     use cranelift_jit::{JITBuilder, JITModule};

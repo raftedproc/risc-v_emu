@@ -110,16 +110,6 @@ impl ExecutionState {
             jit_wrapper: JITWrapper::default(),
         }
     }
-
-    /// Load a 32-bit value from memory.
-    pub fn load32(&self, addr: u32) -> u32 {
-        self.memory_.load32(addr)
-    }
-
-    /// Store a 32-bit value to memory.
-    pub fn store32(&mut self, addr: u32, val: u32) {
-        self.memory_.store32(addr, val)
-    }
 }
 
 /// Holds data to track changes made to the runtime since a fork point.

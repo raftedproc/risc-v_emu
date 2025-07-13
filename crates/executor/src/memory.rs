@@ -7,6 +7,8 @@ use cranelift_jit::JITModule;
 use cranelift_module::{Linkage, Module};
 use memmap2::MmapMut;
 
+use crate::jitwrapper::JITWrapper;
+
 
 /// Holds anon mmap memory allocation.
 #[repr(C)]
@@ -14,21 +16,6 @@ use memmap2::MmapMut;
 pub struct Memory {
     /// The anon mmap memory allocation.
     pub memory: MmapMut,
-}
-
-impl Memory {
-    /// Load a 32-bit value from memory.
-    pub fn load32(&self, addr: u32) -> u32 {
-        let i = addr as usize;
-        // println!("load32 addr {} val {:x}", i, u32::from_le_bytes(self.mem[i..i + 4].try_into().unwrap()));
-        u32::from_le_bytes(self.memory[i..i + 4].try_into().unwrap())
-    }
-    /// Store a 32-bit value to memory.
-    pub fn store32(&mut self, addr: u32, val: u32) {
-        let i = addr as usize;
-        // println!("store32 addr {} val {:x}", i, val);
-        self.memory[i..i + 4].copy_from_slice(&val.to_le_bytes());
-    }
 }
 
 // 2 << 30 : 4GB / 4
@@ -64,12 +51,14 @@ impl Index<u32> for Memory {
 
 /// Memory load helper 
 pub extern "C" fn mem_load32(memory: &mut Memory, addr: u32) -> u32 {
-    memory.load32(addr)
+    println!("mem_load32 size {} addr {}", memory.memory.len(), addr);
+    memory[addr]
 }
 
 /// Memory store helper 
 pub extern "C" fn mem_store32(memory: &mut Memory, addr: u32, val: u32) {
-    memory.store32(addr, val)
+    println!("mem_store32 size {} addr {} val {}", memory.memory.len(), addr, val);
+    memory[addr] = val;
 }
 
 /// helper-ы для доступа к памяти: вызываем обычные Rust-функции
@@ -85,13 +74,38 @@ pub fn call_mem_load(jit: &mut JITModule, b: &mut FunctionBuilder, memory_ptr: V
     b.inst_results(call)[0]
 }
 
-pub fn call_mem_store(jit: &mut JITModule, b: &mut FunctionBuilder, memory_ptr: Value, addr: Value, val: Value) {
-    let mut sig = jit.make_signature();
-    sig.params.push(AbiParam::new(types::I64));
-    sig.params.push(AbiParam::new(types::I32));
-    sig.params.push(AbiParam::new(types::I32));
+pub fn call_mem_load_(jit_wrapper: &mut JITWrapper, b: &mut FunctionBuilder, memory_ptr: Value, addr: Value) -> Value {
+    // let mut sig = jit_wrapper.jit.make_signature();
+    // sig.params.push(AbiParam::new(types::I64));
+    // sig.params.push(AbiParam::new(types::I32));
+    // sig.returns.push(AbiParam::new(types::I32));
+    
+    // let func_id = jit_wrapper.jit.declare_function("mem_load32", Linkage::Import, &sig).expect("Failed to declare function");
+    let func_id = jit_wrapper.helpers.mem_load32;
+    println!("func_id for mem_load32 {}", func_id);
+    let func_ref = jit_wrapper.jit.declare_func_in_func(func_id, &mut b.func);
+    let call = b.ins().call(func_ref, &[memory_ptr, addr]);
+    b.inst_results(call)[0]
+}
 
-    let func_id = jit.declare_function("mem_store32", Linkage::Import, &sig).expect("Failed to declare function");
-    let func_ref = jit.declare_func_in_func(func_id, &mut b.func);
+// pub fn call_mem_store(jit: &mut JITModule, b: &mut FunctionBuilder, memory_ptr: Value, addr: Value, val: Value) {
+//     let mut sig = jit.make_signature();
+//     sig.params.push(AbiParam::new(types::I64));
+//     sig.params.push(AbiParam::new(types::I32));
+//     sig.params.push(AbiParam::new(types::I32));
+
+//     let func_id = jit.declare_function("mem_store32", Linkage::Import, &sig).expect("Failed to declare function");
+//     let func_ref = jit.declare_func_in_func(func_id, &mut b.func);
+//     b.ins().call(func_ref, &[memory_ptr, addr, val]);
+// }
+
+pub fn call_mem_store_(jit_wrapper: &mut JITWrapper, b: &mut FunctionBuilder, memory_ptr: Value, addr: Value, val: Value) {
+    // let mut sig = jit_wrapper.jit.make_signature();
+    // sig.params.push(AbiParam::new(types::I64));
+    // sig.params.push(AbiParam::new(types::I32));
+    // sig.params.push(AbiParam::new(types::I32));
+
+    let func_id = jit_wrapper.helpers.mem_store32;
+    let func_ref = jit_wrapper.jit.declare_func_in_func(func_id, &mut b.func);
     b.ins().call(func_ref, &[memory_ptr, addr, val]);
 }
