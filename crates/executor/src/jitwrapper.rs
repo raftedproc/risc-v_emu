@@ -115,3 +115,8 @@ impl std::fmt::Debug for JITWrapper {
       Ok(())
   }
 }
+
+pub fn dummy_jit_module() -> JITModule {
+  let builder = JITBuilder::new(cranelift_module::default_libcall_names()).unwrap();
+  JITModule::new(builder)
+}

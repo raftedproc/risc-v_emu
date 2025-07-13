@@ -1,7 +1,7 @@
 use std::{ops::Shl, ptr::null};
 
 use crate::{
-    jitwrapper::{TBCacheEntry, SLOW_CACHE_MASK},
+    jitwrapper::{dummy_jit_module, TBCacheEntry, SLOW_CACHE_MASK},
     memory::{call_mem_load_, call_mem_store_},
     store_registers_to_cpu, Opcode,
 };
@@ -40,11 +40,14 @@ pub fn try_to_compile_tb_and_populate_slow_cache<'a>(
     jit_wrapper: &mut JITWrapper,
     slow_tb_cache: &mut SlowTBCache,
 ) -> ExecutionMode {
-    let (tb_ptr, insns_compiled) = compile_tb(executor, jit_wrapper, 16);
+    let (tb_ptr, insns_compiled) = compile_tb(executor, jit_wrapper, 1024);
 
     // WIP this must be refactored  
     if tb_ptr == std::ptr::null() && insns_compiled == 0 {
         println!("rotate module");
+        // TODO consider one time replace
+        let old_jit = std::mem::replace(&mut jit_wrapper.jit, dummy_jit_module());
+        unsafe { old_jit.free_memory(); }
         // println!("before the cleanup {:?}",  jit_wrapper.jit.declarations());
         *jit_wrapper = JITWrapper::default();
         println!("after the cleanup {:?}",  jit_wrapper.jit.declarations());
@@ -53,12 +56,12 @@ pub fn try_to_compile_tb_and_populate_slow_cache<'a>(
     }
 
     if insns_compiled > 0 {
-        // populate_slow_cache(
-        //     executor.state.pc,
-        //     executor.unconstrained,
-        //     tb_ptr,
-        //     slow_tb_cache,
-        // );
+        populate_slow_cache(
+            executor.state.pc,
+            executor.unconstrained,
+            tb_ptr,
+            slow_tb_cache,
+        );
         ExecutionMode::TB(tb_ptr)
     } else {
         ExecutionMode::Emulator
@@ -818,7 +821,7 @@ pub fn compile_tb<'a>(
 
                 // Additional block for overflow case
                 // Jump either to div_block or directly to cont_block with −1.
-                b.ins().brif(is_zero, cont_block, &[neg_one], overflow_block, &[]);
+                b.ins().brif(is_zero, cont_block, &[BlockArg::Value(neg_one)], overflow_block, &[]);
                 
                 // ---------- overflow_block ----------
                 b.switch_to_block(overflow_block);
@@ -826,12 +829,12 @@ pub fn compile_tb<'a>(
                 let cmp_with_min = b.ins().icmp(IntCC::Equal, v1, min_int);
                 let cmp_with_neg_one = b.ins().icmp(IntCC::Equal, v2, neg_one);
                 let is_overflow = b.ins().band(cmp_with_min, cmp_with_neg_one);
-                b.ins().brif(is_overflow, cont_block, &[min_int], div_block, &[]);
+                b.ins().brif(is_overflow, cont_block, &[BlockArg::Value(min_int)], div_block, &[]);
                 
                 // ---------- div_block ----------
                 b.switch_to_block(div_block);
                 let div_res = b.ins().sdiv(v1, v2);
-                b.ins().jump(cont_block, &[div_res]);
+                b.ins().jump(cont_block, &[BlockArg::Value(div_res)]);
                 
                 // ---------- cont_block ----------
                 b.switch_to_block(cont_block);
@@ -859,12 +862,12 @@ pub fn compile_tb<'a>(
 
                 // Additional block for overflow case
                 // Jump either to div_block or directly to cont_block with −1.
-                b.ins().brif(is_zero, cont_block, &[neg_one], div_block, &[]);
+                b.ins().brif(is_zero, cont_block, &[BlockArg::Value(neg_one)], div_block, &[]);
                 
                 // ---------- div_block ----------
                 b.switch_to_block(div_block);
                 let div_res = b.ins().udiv(v1, v2);
-                b.ins().jump(cont_block, &[div_res]);
+                b.ins().jump(cont_block, &[BlockArg::Value(div_res)]);
                 
                 // ---------- cont_block ----------
                 b.switch_to_block(cont_block);
@@ -893,7 +896,7 @@ pub fn compile_tb<'a>(
 
                 // Additional block for overflow case
                 // Jump either to div_block or directly to cont_block with −1.
-                b.ins().brif(is_zero, cont_block, &[v1], overflow_block, &[]);
+                b.ins().brif(is_zero, cont_block, &[BlockArg::Value(v1)], overflow_block, &[]);
                 
                 // ---------- overflow_block ----------
                 b.switch_to_block(overflow_block);
@@ -901,12 +904,12 @@ pub fn compile_tb<'a>(
                 let cmp_with_min = b.ins().icmp(IntCC::Equal, v1, min_int);
                 let cmp_with_neg_one = b.ins().icmp(IntCC::Equal, v2, neg_one);
                 let is_overflow = b.ins().band(cmp_with_min, cmp_with_neg_one);
-                b.ins().brif(is_overflow, cont_block, &[zero], div_block, &[]);
+                b.ins().brif(is_overflow, cont_block, &[BlockArg::Value(zero)], div_block, &[]);
                 
                 // ---------- div_block ----------
                 b.switch_to_block(div_block);
                 let div_res = b.ins().srem(v1, v2);
-                b.ins().jump(cont_block, &[div_res]);
+                b.ins().jump(cont_block, &[BlockArg::Value(div_res)]);
                 
                 // ---------- cont_block ----------
                 b.switch_to_block(cont_block);
@@ -932,7 +935,7 @@ pub fn compile_tb<'a>(
 
                 // Additional block for overflow case
                 // Jump either to div_block or directly to cont_block with −1.
-                b.ins().brif(is_zero, cont_block, &[v1], div_block, &[]);
+                b.ins().brif(is_zero, cont_block, &[BlockArg::Value(v1)], div_block, &[]);
                 
                 // ---------- overflow_block ----------
                 // b.switch_to_block(overflow_block);
@@ -945,7 +948,7 @@ pub fn compile_tb<'a>(
                 // ---------- div_block ----------
                 b.switch_to_block(div_block);
                 let div_res = b.ins().urem(v1, v2);
-                b.ins().jump(cont_block, &[div_res]);
+                b.ins().jump(cont_block, &[BlockArg::Value(div_res)]);
                 
                 // ---------- cont_block ----------
                 b.switch_to_block(cont_block);

@@ -644,6 +644,7 @@ impl<'a> Executor<'a> {
         instruction: &Instruction,
         rng: &mut Rand,
     ) -> Result<(), ExecutionError> {
+        println!("pc {} {:?}", self.state.pc, instruction);
         let mut next_pc = self.state.pc.wrapping_add(4);
 
         let rd: Register;
@@ -1145,63 +1146,64 @@ impl<'a> Executor<'a> {
 
     /// Executes up to `self.shard_batch_size` cycles of the program, returning whether the program
     /// has finished.
-    // pub fn execute(&mut self) -> Result<bool, ExecutionError> {
-    //     // If it's the first cycle, initialize the program.
-    //     if self.state.global_clk == 0 {
-    //         self.initialize();
-    //     }
+    pub fn execute(&mut self) -> Result<bool, ExecutionError> {
+        // If it's the first cycle, initialize the program.
+        if self.state.global_clk == 0 {
+            self.initialize();
+        }
 
-    //     let mut rng = Rand::new();
-    //     let done_inv = (self.program.instructions.len() * 4) as u32;
+        let mut rng = Rand::new();
+        let done_inv = (self.program.instructions.len() * 4) as u32;
 
-    //     // let mut instr_cnt = 0;
-    //     // Loop until we've executed `self.shard_batch_size` shards if `self.shard_batch_size` is
-    //     // set.
-    //     let done;
-    //     loop {
-    //         // instr_cnt += 1;
-    //         // self.state
-    //         //     .pot_tb
-    //         //     .entry(self.state.pc)
-    //         //     .and_modify(|(cnt, _)| {
-    //         //         *cnt += 1;
-    //         //     });
+        // let mut instr_cnt = 0;
+        // Loop until we've executed `self.shard_batch_size` shards if `self.shard_batch_size` is
+        // set.
+        let done;
+        loop {
+            // instr_cnt += 1;
+            // self.state
+            //     .pot_tb
+            //     .entry(self.state.pc)
+            //     .and_modify(|(cnt, _)| {
+            //         *cnt += 1;
+            //     });
 
-    //         if self.execute_cycle(done_inv, &mut rng)? {
-    //             done = true;
-    //             break;
-    //         }
-    //         // if self.state.is_jmp {
-    //         //     self.state
-    //         //         .pot_tb
-    //         //         .entry(self.state.prev_pc - self.state.tb_len)
-    //         //         .or_insert((0, self.state.tb_len));
-    //         //     self.state.is_jmp = false;
-    //         //     self.state.tb_len = 0;
-    //         // } else {
-    //         //     self.state.tb_len += 1;
-    //         // }
-    //     }
+            println!("executing cycle {}", self.state.pc);
+            if self.execute_cycle(done_inv, &mut rng)? {
+                done = true;
+                break;
+            }
+            // if self.state.is_jmp {
+            //     self.state
+            //         .pot_tb
+            //         .entry(self.state.prev_pc - self.state.tb_len)
+            //         .or_insert((0, self.state.tb_len));
+            //     self.state.is_jmp = false;
+            //     self.state.tb_len = 0;
+            // } else {
+            //     self.state.tb_len += 1;
+            // }
+        }
 
-    //     if done {
-    //         self.postprocess();
-    //     }
+        if done {
+            self.postprocess();
+        }
 
-    //     // let mut jit_cnt = 0;
-    //     // let mut aggr_count = 0;
-    //     // for (addr, (cnt, len)) in self.state.pot_tb.iter() {
-    //     //     if *len > 1 && *cnt > 1 {
-    //     //         println!("addr: {}: len {}: cnt {}", addr, len, cnt);
-    //     //         jit_cnt += cnt * len;
-    //     //         aggr_count += 1;
-    //     //     }
-    //     // }
-    //     // println!("instr_cnt: {}", instr_cnt);
-    //     // println!("aggr_count: {}", aggr_count);
-    //     // println!("jit_cnt: {}", jit_cnt);
+        // let mut jit_cnt = 0;
+        // let mut aggr_count = 0;
+        // for (addr, (cnt, len)) in self.state.pot_tb.iter() {
+        //     if *len > 1 && *cnt > 1 {
+        //         println!("addr: {}: len {}: cnt {}", addr, len, cnt);
+        //         jit_cnt += cnt * len;
+        //         aggr_count += 1;
+        //     }
+        // }
+        // println!("instr_cnt: {}", instr_cnt);
+        // println!("aggr_count: {}", aggr_count);
+        // println!("jit_cnt: {}", jit_cnt);
 
-    //     Ok(done)
-    // }
+        Ok(done)
+    }
 
     pub fn tb_find_or_compile(
         &mut self,
@@ -1225,65 +1227,64 @@ impl<'a> Executor<'a> {
     }
 
     /// Main loop
-    pub fn execute(&mut self) -> Result<bool, ExecutionError> {
-        // If it's the first cycle, initialize the program.
-        if self.state.global_clk == 0 {
-            self.initialize();
-        }
+    // pub fn execute(&mut self) -> Result<bool, ExecutionError> {
+    //     // If it's the first cycle, initialize the program.
+    //     if self.state.global_clk == 0 {
+    //         self.initialize();
+    //     }
 
-        let mut rng = Rand::new();
-        let done_inv = (self.program.instructions.len() * 4) as u32;
+    //     let mut rng = Rand::new();
+    //     let done_inv = (self.program.instructions.len() * 4) as u32;
 
-        let mut fast_tb_cache = FastTBCache::default();
-        let mut slow_tb_cache = SlowTBCache::default();
-        // TODO remove jw from the state
-        let mut jit_wrapper = JITWrapper::default();
+    //     let mut fast_tb_cache = FastTBCache::default();
+    //     let mut slow_tb_cache = SlowTBCache::default();
+    //     // TODO remove jw from the state
+    //     let mut jit_wrapper = JITWrapper::default();
 
-        let mut done = false;
-        loop {
-        // while self.state.global_clk < 300 {
-            // println!("!!!!!!!!!!!!!!!!!!");
-            let mode =
-                self.tb_find_or_compile(&mut fast_tb_cache, &mut slow_tb_cache, &mut jit_wrapper);
-            if let ExecutionMode::TB(tb) = mode {
-                // println!("executing tb");
-                unsafe {
-                    let tb_executor: extern "C" fn(*mut Memory, *mut RegisterFile) -> u32 =
-                        std::mem::transmute(tb);
-                    self.state.pc =
-                        tb_executor(&mut self.state.memory_, &mut self.state.register_file);
-                }
-                // println!("################res_pc: {}", self.state.pc);
-                // println!("################res_pc: {:?}", self.state.register_file);
-                let done = self.state.pc == 0
-                    || self.state.pc.wrapping_sub(self.program.pc_base) >= done_inv;
-                if done {
-                    // println!("################ is done: {} {}", self.state.pc, done_inv);
-                    break;
-                }
-            } else {
-                println!("executing cycle {}", self.state.pc);
-                // TODO remove this
+    //     let mut done = false;
+    //     loop {
+    //     // while self.state.global_clk < 300 {
+    //         // println!("!!!!!!!!!!!!!!!!!!");
+    //         let mode =
+    //             self.tb_find_or_compile(&mut fast_tb_cache, &mut slow_tb_cache, &mut jit_wrapper);
+    //         if let ExecutionMode::TB(tb) = mode {
+    //             // println!("executing tb");
+    //             unsafe {
+    //                 let tb_executor: extern "C" fn(*mut Memory, *mut RegisterFile) -> u32 =
+    //                     std::mem::transmute(tb);
+    //                 self.state.pc =
+    //                     tb_executor(&mut self.state.memory_, &mut self.state.register_file);
+    //             }
+    //             // println!("################res_pc: {}", self.state.pc);
+    //             // println!("################res_pc: {:?}", self.state.register_file);
+    //             let done = self.state.pc == 0
+    //                 || self.state.pc.wrapping_sub(self.program.pc_base) >= done_inv;
+    //             if done {
+    //                 // println!("################ is done: {} {}", self.state.pc, done_inv);
+    //                 break;
+    //             }
+    //         } else {
+    //             println!("executing cycle {}", self.state.pc);
+    //             // TODO remove this
 
-                if self.execute_cycle(done_inv, &mut rng)? {
-                    done = true;
-                    break;
-                }
-                // println!("################res_pc: {:?}", self.state.register_file);
-            }
+    //             if self.execute_cycle(done_inv, &mut rng)? {
+    //                 done = true;
+    //                 break;
+    //             }
+    //             // println!("################res_pc: {:?}", self.state.register_file);
+    //         }
 
-            if self.state.global_clk % 100000 == 0 {
-                println!("after the loop {:?}",  jit_wrapper.jit.declarations());
-            }
+    //         // if self.state.global_clk % 100000 == 0 {
+    //         //     println!("after the loop {:?}",  jit_wrapper.jit.declarations());
+    //         // }
+    //     }
 
-        }
+    //     if done {
+    //         self.postprocess();
+    //     }
 
-        if done {
-            self.postprocess();
-        }
-
-        Ok(done)
-    }
+    //     Ok(done)
+    // }
 
     fn postprocess(&mut self) {
         // Flush remaining stdout/stderr
