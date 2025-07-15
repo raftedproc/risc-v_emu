@@ -62,25 +62,7 @@ pub extern "C" fn mem_store32(memory: &mut Memory, addr: u32, val: u32) {
 }
 
 /// helper-ы для доступа к памяти: вызываем обычные Rust-функции
-pub fn call_mem_load(jit: &mut JITModule, b: &mut FunctionBuilder, memory_ptr: Value, addr: Value) -> Value {
-    let mut sig = jit.make_signature();
-    sig.params.push(AbiParam::new(types::I64));
-    sig.params.push(AbiParam::new(types::I32));
-    sig.returns.push(AbiParam::new(types::I32));
-    
-    let func_id = jit.declare_function("mem_load32", Linkage::Import, &sig).expect("Failed to declare function");
-    let func_ref = jit.declare_func_in_func(func_id, &mut b.func);
-    let call = b.ins().call(func_ref, &[memory_ptr, addr]);
-    b.inst_results(call)[0]
-}
-
 pub fn call_mem_load_(jit_wrapper: &mut JITWrapper, b: &mut FunctionBuilder, memory_ptr: Value, addr: Value) -> Value {
-    // let mut sig = jit_wrapper.jit.make_signature();
-    // sig.params.push(AbiParam::new(types::I64));
-    // sig.params.push(AbiParam::new(types::I32));
-    // sig.returns.push(AbiParam::new(types::I32));
-    
-    // let func_id = jit_wrapper.jit.declare_function("mem_load32", Linkage::Import, &sig).expect("Failed to declare function");
     let func_id = jit_wrapper.helpers.mem_load32;
     println!("func_id for mem_load32 {}", func_id);
     let func_ref = jit_wrapper.jit.declare_func_in_func(func_id, &mut b.func);
@@ -88,23 +70,7 @@ pub fn call_mem_load_(jit_wrapper: &mut JITWrapper, b: &mut FunctionBuilder, mem
     b.inst_results(call)[0]
 }
 
-// pub fn call_mem_store(jit: &mut JITModule, b: &mut FunctionBuilder, memory_ptr: Value, addr: Value, val: Value) {
-//     let mut sig = jit.make_signature();
-//     sig.params.push(AbiParam::new(types::I64));
-//     sig.params.push(AbiParam::new(types::I32));
-//     sig.params.push(AbiParam::new(types::I32));
-
-//     let func_id = jit.declare_function("mem_store32", Linkage::Import, &sig).expect("Failed to declare function");
-//     let func_ref = jit.declare_func_in_func(func_id, &mut b.func);
-//     b.ins().call(func_ref, &[memory_ptr, addr, val]);
-// }
-
 pub fn call_mem_store_(jit_wrapper: &mut JITWrapper, b: &mut FunctionBuilder, memory_ptr: Value, addr: Value, val: Value) {
-    // let mut sig = jit_wrapper.jit.make_signature();
-    // sig.params.push(AbiParam::new(types::I64));
-    // sig.params.push(AbiParam::new(types::I32));
-    // sig.params.push(AbiParam::new(types::I32));
-
     let func_id = jit_wrapper.helpers.mem_store32;
     let func_ref = jit_wrapper.jit.declare_func_in_func(func_id, &mut b.func);
     b.ins().call(func_ref, &[memory_ptr, addr, val]);

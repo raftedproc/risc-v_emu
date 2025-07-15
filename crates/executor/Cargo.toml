@@ -43,10 +43,10 @@ vec_map = { version = "0.8.2", features = ["serde"] }
 enum-map = { version = "2.7.3", features = ["serde"] }
 frand = "0.10.1"
 memmap2 = "0.9.5"
-cranelift-codegen = "0.118.0"
-cranelift-frontend = "0.118.0"
-cranelift-jit = { version = "0.118.0", features = ["memmap2"] }
-cranelift-module = "0.118.0"
+cranelift-codegen = "0.121.1"
+cranelift-frontend = "0.121.1"
+cranelift-jit = { version = "0.121.1", features = ["memmap2"] }
+cranelift-module = "0.121.1"
 libc = "0.2.172"
 
 [dev-dependencies]

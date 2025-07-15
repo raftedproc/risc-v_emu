@@ -2,7 +2,7 @@ use std::{ops::Shl, ptr::null};
 
 use crate::{
     jitwrapper::{dummy_jit_module, TBCacheEntry, SLOW_CACHE_MASK},
-    memory::{call_mem_load_, call_mem_store_},
+    memory::{call_mem_load, call_mem_load_, call_mem_store_},
     store_registers_to_cpu, Opcode,
 };
 use cranelift_codegen::ir::{condcodes::IntCC, *};
@@ -256,107 +256,68 @@ pub fn compile_tb<'a>(
 
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, v);
             }
-            Opcode::LB => {
-                // let (rd, rs1, imm) = inst.i_type();
-                // let reg_idx = rs1 as usize;
-                // let op_b = load_reg_if_needed_and_not_dirty(
-                //     &mut b,
-                //     register_file_ptr,
-                //     reg_idx,
-                //     &mut regs_read_or_changed_so_far,
-                //     &mut dirty_regs,
-                //     &regs,
-                // );
+            Opcode::LB | Opcode::LBU => {
+                let (rd, rs1, imm) = inst.i_type();
+                let reg_idx = rs1 as usize;
+                let op_b = load_reg_if_needed_and_not_dirty(
+                    &mut b,
+                    register_file_ptr,
+                    reg_idx,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    &regs,
+                );
 
-                // let base = b.use_var(regs[op_b]);
-                // let imm = imm as i64;
-                // let addr = b.ins().iadd_imm(base, imm);
+                let four = b.ins().iconst(types::I32, 4);
 
-                // // Call load32 (we don't have separate load8)
-                // let val = call_mem_load(jit, &mut b, memory_ptr, addr);
+                let base = b.use_var(regs[op_b]);
+                let addr = b.ins().iadd_imm(base, imm as i64);
+                let shift_amount = b.ins().srem(addr,four);
 
-                // // Extract the byte and sign-extend it to 32 bits
-                // let shift_amount = b.ins().iconst(types::I32, 24);
-                // let byte_val = b.ins().ishl(val, shift_amount);
-                // let signed_val = b.ins().sshr(byte_val, shift_amount);
+                // Call load32 (we don't have separate load8)
+                let val = call_mem_load_(jit_wrapper, &mut b, memory_ptr, addr);
 
-                // define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, signed_val);
+                // Extract the needed byte
+                let byte_val = b.ins().ushr(val, shift_amount);
+                let byte_val = b.ins().band(byte_val, b.ins().iconst(types::I32, 0xFF));
+
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, byte_val);
                 break;
             }
-            Opcode::LBU => {
-                // let (rd, rs1, imm) = inst.i_type();
-                // let rs1 = load_reg_if_needed_and_not_dirty(
-                //     &mut b,
-                //     register_file_ptr,
-                //     rs1 as usize,
-                //     &mut regs_read_or_changed_so_far,
-                //     &mut dirty_regs,
-                //     &regs,
-                // );
+            Opcode::LH | Opcode::LHU => {
+                // Decode instruction fields
+                let (rd, rs1, imm) = inst.i_type();
+                let reg_idx = rs1 as usize;
 
-                // let base = b.use_var(regs[rs1]);
-                // let imm = imm as i64;
-                // let addr = b.ins().iadd_imm(base, imm);
+                // Ensure source register is available in a Cranelift variable
+                let op_b = load_reg_if_needed_and_not_dirty(
+                    &mut b,
+                    register_file_ptr,
+                    reg_idx,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    &regs,
+                );
 
-                // // Call load32 (we don't have separate load8)
-                // let val = call_mem_load(jit, &mut b, memory_ptr, addr);
+                let one = b.ins().iconst(types::I32, 1);
+                let four = b.ins().iconst(types::I32, 4);
+                let mask_16bits = b.ins().iconst(types::I32, 0xFFFF);
 
-                // // Extract the byte (unsigned)
-                // let mask = b.ins().iconst(types::I32, 0xFF);
-                // let unsigned_val = b.ins().band(val, mask);
+                // Effective address: base + immediate
+                let base = b.use_var(regs[op_b]);
+                let addr = b.ins().iadd_imm(base, imm as i64);
 
-                // define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, unsigned_val);
-                break;
-            }
-            Opcode::LH => {
-                // let (rd, rs1, imm) = inst.i_type();
-                // let rs1 = load_reg_if_needed_and_not_dirty(
-                //     &mut b,
-                //     register_file_ptr,
-                //     rs1 as usize,
-                //     &mut regs_read_or_changed_so_far,
-                //     &mut dirty_regs,
-                //     &regs,
-                // );
-
-                // let base = b.use_var(regs[rs1]);
-                // let imm = imm as i64;
-                // let addr = b.ins().iadd_imm(base, imm);
-
-                // // Call load32 (we don't have separate load16)
-                // let val = call_mem_load(jit, &mut b, memory_ptr, addr);
+                // Load the 32-bit word containing the requested half-word
+                let val = call_mem_load_(jit_wrapper, &mut b, memory_ptr, addr);
+                let addr_shifted = b.ins().ushr(addr, one);
+                let higher_or_lower = b.ins().band(addr_shifted, one);
+                let shift_amount = b.ins().band(higher_or_lower, four);
+                let mask = b.ins().ishl(mask_16bits, shift_amount);
 
                 // // Extract the halfword and sign-extend it to 32 bits
-                // let shift_amount = b.ins().iconst(types::I32, 16);
-                // let hw_val = b.ins().ishl(val, shift_amount);
-                // let signed_val = b.ins().sshr(hw_val, shift_amount);
+                let hw_val = b.ins().band(val,mask);
 
-                // define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, signed_val);
-                break;
-            }
-            Opcode::LHU => {
-                // let (rd, rs1, imm) = inst.i_type();
-                // let rs1 = load_reg_if_needed_and_not_dirty(
-                //     &mut b,
-                //     register_file_ptr,
-                //     rs1 as usize,
-                //     &mut regs_read_or_changed_so_far,
-                //     &mut dirty_regs,
-                //     &regs,
-                // );
-
-                // let base = b.use_var(regs[rs1]);
-                // let imm = imm as i64;
-                // let addr = b.ins().iadd_imm(base, imm);
-
-                // // Call load32 (we don't have separate load16)
-                // let val = call_mem_load(jit, &mut b, memory_ptr, addr);
-
-                // // Extract the halfword (unsigned)
-                // let mask = b.ins().iconst(types::I32, 0xFFFF);
-                // let unsigned_val = b.ins().band(val, mask);
-
-                // define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, unsigned_val);
+                define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, hw_val);
                 break;
             }
             Opcode::LW => {
