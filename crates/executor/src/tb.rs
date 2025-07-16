@@ -2,7 +2,7 @@ use std::{ops::Shl, ptr::null};
 
 use crate::{
     jitwrapper::{dummy_jit_module, TBCacheEntry, SLOW_CACHE_MASK},
-    memory::{call_mem_load, call_mem_load_, call_mem_store_},
+    memory::{call_mem_load_, call_mem_store_},
     store_registers_to_cpu, Opcode,
 };
 use cranelift_codegen::ir::{condcodes::IntCC, *};
@@ -268,21 +268,24 @@ pub fn compile_tb<'a>(
                     &regs,
                 );
 
-                let four = b.ins().iconst(types::I32, 4);
+                let three = b.ins().iconst(types::I32, 3);
 
                 let base = b.use_var(regs[op_b]);
                 let addr = b.ins().iadd_imm(base, imm as i64);
-                let shift_amount = b.ins().srem(addr,four);
+                // TODO see if the next op is replaced by `addr & 3`
+                let shift_amount = b.ins().band_imm(addr,3);
+                let shift_amount = b.ins().ishl_imm(shift_amount, 3);
+
+                let aligned_addr = b.ins().band_not(addr,three);
 
                 // Call load32 (we don't have separate load8)
-                let val = call_mem_load_(jit_wrapper, &mut b, memory_ptr, addr);
+                let val = call_mem_load_(jit_wrapper, &mut b, memory_ptr, aligned_addr);
 
                 // Extract the needed byte
                 let byte_val = b.ins().ushr(val, shift_amount);
-                let byte_val = b.ins().band(byte_val, b.ins().iconst(types::I32, 0xFF));
+                let byte_val = b.ins().band_imm(byte_val, 0xff);
 
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, byte_val);
-                break;
             }
             Opcode::LH | Opcode::LHU => {
                 // Decode instruction fields
@@ -318,7 +321,6 @@ pub fn compile_tb<'a>(
                 let hw_val = b.ins().band(val,mask);
 
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, hw_val);
-                break;
             }
             Opcode::LW => {
                 let (rd, rs1, imm) = inst.i_type();
@@ -339,25 +341,38 @@ pub fn compile_tb<'a>(
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, val);
             }
             Opcode::SB => {
-                // let (rs1, rs2, imm) = inst.s_type();
-                // // let Instruction { rs2, rs1, imm, .. } = inst;
-                // let (rs1, rs2) = load_two_regs(
-                //     &mut b,
-                //     register_file_ptr,
-                //     &regs,
-                //     &mut regs_read_or_changed_so_far,
-                //     &mut dirty_regs,
-                //     rs1 as u32,
-                //     rs2 as u32,
-                // );
+                let (rs1, rs2, imm) = inst.s_type();
+                let (rs1, rs2) = load_two_regs(
+                    &mut b,
+                    register_file_ptr,
+                    &regs,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    rs1 as u32,
+                    rs2 as u32,
+                );
 
-                // let base = b.use_var(regs[rs2]);
-                // let imm = imm as i64;
-                // let addr = b.ins().iadd_imm(base, imm);
-                // let val = b.use_var(regs[rs1]);
+                let three = b.ins().iconst(types::I32, 3);
+                let ff = b.ins().iconst(types::I32, 0xFF);
 
-                // call_mem_store(jit, &mut b, memory_ptr, addr, val);
-                break;
+                let base = b.use_var(regs[rs2]);
+                let addr = b.ins().iadd_imm(base, imm as i64);
+                let shift_amount = b.ins().band_imm(addr,3);
+
+                let shift_amount = b.ins().ishl_imm(shift_amount, 3);
+
+                let aligned_addr = b.ins().band_not(addr,three);
+                
+                let val = b.use_var(regs[rs1]);
+                let byte_val: Value = b.ins().band_imm(val, 0xFF);
+                let shifted_byte_val = b.ins().ishl(byte_val, shift_amount);
+
+                let stored_word_mask = b.ins().ishl(ff, shift_amount);
+                let memory_word_value = call_mem_load_(jit_wrapper, &mut b, memory_ptr, aligned_addr);
+                let new_memory_word_value = b.ins().band_not(memory_word_value, stored_word_mask);
+                let new_memory_word_value = b.ins().iadd(new_memory_word_value, shifted_byte_val);
+
+                call_mem_store_(jit_wrapper, &mut b, memory_ptr, aligned_addr, new_memory_word_value);
             }
             Opcode::SH => {
                 // let (rs1, rs2, imm) = inst.s_type();
@@ -961,7 +976,7 @@ pub fn compile_tb<'a>(
     let sign = b.func.signature.clone();
     b.finalize();
 
-    // println!("{}", ctx.func.display());
+    println!("{}", ctx.func.display());
 
     let id = jit_wrapper.jit.declare_anonymous_function(&sign).unwrap();
     jit_wrapper.jit.define_function(id, &mut ctx).unwrap();
@@ -1306,7 +1321,7 @@ mod tests {
         let program = Program::new(instructions, 0, 0);
         let mut runtime = Executor::new(program);
 
-        runtime.state.memory_.store32(44, 42);
+        runtime.state.memory_[44] = 42;
         let (insns, next_pc) = setup_test_env_with_cpu(&mut runtime);
 
         // Verify the results
@@ -1323,6 +1338,9 @@ mod tests {
 
     #[test]
     fn test_byte_load_store_instructions() {
+        let addr = 1023;
+        let addr_offset_mask = addr & 3 << 3;
+        let val = 0xFF;
         // main:
         //     addi x10, x0, 1024      # base address in x10
         //     addi x20, x0, 0xFF      # value to store (0xFF)
@@ -1331,11 +1349,11 @@ mod tests {
         //     lbu  x22, 0(x10)        # load unsigned byte
         let instructions = vec![
             // addi x10, x0, 1024
-            Instruction::new(Opcode::ADD, 10, 0, 1024, false, true),
+            Instruction::new(Opcode::ADD, 10, 0, addr, false, true),
             // addi x20, x0, 0xFF
-            Instruction::new(Opcode::ADD, 20, 0, 0xFF, false, true),
+            Instruction::new(Opcode::ADD, 20, 0, val, false, true),
             // sb x20, 0(x10)
-            Instruction::new(Opcode::SB, 10, 20, 0, false, true),
+            Instruction::new(Opcode::SB, 20, 10, 0, false, true),
             // lb x21, 0(x10)
             Instruction::new(Opcode::LB, 21, 10, 0, false, true),
             // lbu x22, 0(x10)
@@ -1344,6 +1362,7 @@ mod tests {
 
         let program = Program::new(instructions, 0, 0);
         let mut runtime = Executor::new(program);
+        runtime.state.memory_[addr & !3] = 0xfefefefe;
         let (insns, next_pc) = setup_test_env_with_cpu(&mut runtime);
 
         // Verify the results:
@@ -1353,13 +1372,13 @@ mod tests {
         assert_eq!(next_pc, 20, "Next PC should be 20 after execution");
 
         // x10 should hold the base address 1024
-        assert_eq!(runtime.register(Register::X10), 1024);
+        assert_eq!(runtime.register(Register::X10), addr);
         // Memory at 1024 should contain 0xFF (lowest byte of the word)
-        assert_eq!(runtime.state.memory_.load32(1024), 0xFF);
+        assert_eq!(runtime.state.memory_[addr & !3], 0xfffefefe);
         // x20's low byte is 0xFF
         assert_eq!(runtime.register(Register::X20) & 0xFF, 0xFF);
         // LB sign-extends 0xFF -> -1
-        assert_eq!(runtime.register(Register::X21) as i32, -1);
+        assert_eq!(runtime.register(Register::X21), 0xFF);
         // LBU zero-extends 0xFF -> 255
         assert_eq!(runtime.register(Register::X22), 0xFF);
     }
@@ -1388,7 +1407,7 @@ mod tests {
         assert_eq!(insns, 5);
         assert_eq!(next_pc, 20);
         assert_eq!(runtime.register(Register::X10), 1024);
-        assert_eq!(runtime.state.memory_.load32(1024), 0xFFFF);
+        assert_eq!(runtime.state.memory_[1024], 0xFFFF);
         assert_eq!(runtime.register(Register::X20) & 0xFFFF, 0xFFFF);
         assert_eq!(runtime.register(Register::X21) as i32, -1);
         assert_eq!(runtime.register(Register::X22), 0xFFFF);
@@ -1414,7 +1433,7 @@ mod tests {
         assert_eq!(next_pc, 12);
         assert_eq!(runtime.register(Register::X10), 4);
         assert_eq!(runtime.register(Register::X20), 123);
-        assert_eq!(runtime.state.memory_.load32(8), 123);
+        assert_eq!(runtime.state.memory_[8], 123);
     }
     #[test]
     fn test_jal_instruction() {

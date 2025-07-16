@@ -51,20 +51,20 @@ impl Index<u32> for Memory {
 
 /// Memory load helper 
 pub extern "C" fn mem_load32(memory: &mut Memory, addr: u32) -> u32 {
-    println!("mem_load32 size {} addr {}", memory.memory.len(), addr);
+    println!("mem_load32 addr {}", addr);
+    println!("mem_load32 addr {} val {}", addr, memory[addr]);
     memory[addr]
 }
 
 /// Memory store helper 
 pub extern "C" fn mem_store32(memory: &mut Memory, addr: u32, val: u32) {
-    println!("mem_store32 size {} addr {} val {}", memory.memory.len(), addr, val);
+    println!("mem_store32 addr {} val {}", addr, val);
     memory[addr] = val;
 }
 
 /// helper-ы для доступа к памяти: вызываем обычные Rust-функции
 pub fn call_mem_load_(jit_wrapper: &mut JITWrapper, b: &mut FunctionBuilder, memory_ptr: Value, addr: Value) -> Value {
     let func_id = jit_wrapper.helpers.mem_load32;
-    println!("func_id for mem_load32 {}", func_id);
     let func_ref = jit_wrapper.jit.declare_func_in_func(func_id, &mut b.func);
     let call = b.ins().call(func_ref, &[memory_ptr, addr]);
     b.inst_results(call)[0]
