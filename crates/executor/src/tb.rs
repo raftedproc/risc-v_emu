@@ -40,7 +40,7 @@ pub fn try_to_compile_tb_and_populate_slow_cache<'a>(
     jit_wrapper: &mut JITWrapper,
     slow_tb_cache: &mut SlowTBCache,
 ) -> ExecutionMode {
-    let (tb_ptr, insns_compiled) = compile_tb(executor, jit_wrapper, 1024);
+    let (tb_ptr, insns_compiled) = compile_tb(executor, jit_wrapper, 16);
 
     // WIP this must be refactored  
     if tb_ptr == std::ptr::null() && insns_compiled == 0 {
@@ -55,6 +55,7 @@ pub fn try_to_compile_tb_and_populate_slow_cache<'a>(
         return ExecutionMode::Emulator;
     }
 
+    println!("insns_compiled {}", insns_compiled);
     if insns_compiled > 0 {
         populate_slow_cache(
             executor.state.pc,
@@ -479,7 +480,6 @@ pub fn compile_tb<'a>(
 
                 // Calculate target and fallthrough addresses
                 // Calculate target address (pc + offset) ensuring proper casting
-                pc += 4;
                 let imm = imm as i64;
                 let target_pc = b.ins().iconst(types::I32, (pc as i64) + imm);
                 let fallthrough_pc = b.ins().iconst(types::I32, (pc + 4) as i64);
@@ -512,8 +512,6 @@ pub fn compile_tb<'a>(
 
                 // Compare rs1 and rs2
                 let cond = b.ins().icmp(IntCC::NotEqual, v1, v2);
-
-                pc += 4;
 
                 let imm = imm as i64;
                 // Calculate target and fallthrough addresses
@@ -549,8 +547,6 @@ pub fn compile_tb<'a>(
 
                 // Compare rs1 < rs2 (signed)
                 let cond = b.ins().icmp(IntCC::SignedLessThan, v1, v2);
-
-                pc += 4;
 
                 let imm = imm as i64;
                 // Calculate target and fallthrough addresses
@@ -589,7 +585,6 @@ pub fn compile_tb<'a>(
 
                 // Calculate target and fallthrough addresses
                 // Calculate target address (pc + offset) ensuring proper casting
-                pc += 4;
 
                 let imm = imm as i64;
                 let target_pc = b.ins().iconst(types::I32, (pc as i64) + imm);
@@ -623,8 +618,6 @@ pub fn compile_tb<'a>(
 
                 // Compare rs1 < rs2 (unsigned)
                 let cond = b.ins().icmp(IntCC::UnsignedLessThan, v1, v2);
-
-                pc += 4;
 
                 let imm = imm as i64;
                 // Calculate target and fallthrough addresses
@@ -660,8 +653,6 @@ pub fn compile_tb<'a>(
 
                 // Compare rs1 >= rs2 (unsigned)
                 let cond = b.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, v1, v2);
-
-                pc += 4;
 
                 let imm = imm as i64;
                 // Calculate target and fallthrough addresses
@@ -965,7 +956,7 @@ pub fn compile_tb<'a>(
     // println!("compile_tb ########### cnt: {}", cnt);
     // return next PC if we reached the limit or if there was no terminal instruction
     if !term_was_added || (!term_was_added && cnt == max_insns) {
-        // println!("compile_tb 11111 cnt: {}", cnt);
+        println!("compile_tb add terminal cnt: {}", cnt);
         store_registers_to_cpu(&mut b, register_file_ptr, &regs, &dirty_regs);
         let rvals = &[b.ins().iconst(types::I32, pc as i64)];
         b.ins().return_(rvals);
@@ -980,8 +971,6 @@ pub fn compile_tb<'a>(
 
     let id = jit_wrapper.jit.declare_anonymous_function(&sign).unwrap();
     jit_wrapper.jit.define_function(id, &mut ctx).unwrap();
-
-    // println!("{}", ctx.func.display());
 
     jit_wrapper.jit.clear_context(&mut ctx);
     // jit.finalize_definitions().expect("must be ok");
