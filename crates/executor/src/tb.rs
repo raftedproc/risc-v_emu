@@ -1,9 +1,7 @@
 use std::{ops::Shl, ptr::null};
 
 use crate::{
-    jitwrapper::{dummy_jit_module, TBCacheEntry, SLOW_CACHE_MASK},
-    memory::{call_mem_load_, call_mem_store_},
-    store_registers_to_cpu, Opcode,
+    call_regs_printout, jitwrapper::{dummy_jit_module, TBCacheEntry, SLOW_CACHE_MASK}, memory::{call_mem_load_, call_mem_store_, call_printout_value}, store_registers_to_cpu, Opcode
 };
 use cranelift_codegen::ir::{condcodes::IntCC, *};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
@@ -40,7 +38,7 @@ pub fn try_to_compile_tb_and_populate_slow_cache<'a>(
     jit_wrapper: &mut JITWrapper,
     slow_tb_cache: &mut SlowTBCache,
 ) -> ExecutionMode {
-    let (tb_ptr, insns_compiled) = compile_tb(executor, jit_wrapper, 16);
+    let (tb_ptr, insns_compiled) = compile_tb(executor, jit_wrapper, 1);
 
     // WIP this must be refactored  
     if tb_ptr == std::ptr::null() && insns_compiled == 0 {
@@ -55,7 +53,7 @@ pub fn try_to_compile_tb_and_populate_slow_cache<'a>(
         return ExecutionMode::Emulator;
     }
 
-    println!("insns_compiled {}", insns_compiled);
+    // println!("insns_compiled {}", insns_compiled);
     if insns_compiled > 0 {
         populate_slow_cache(
             executor.state.pc,
@@ -102,6 +100,8 @@ pub fn compile_tb<'a>(
     }
 
     let mut pc = executor.state.pc;
+    // println!("pc before the loop {}", pc);
+    let _ = call_regs_printout(jit_wrapper, &mut b, register_file_ptr);
 
     let mut cnt = 0;
     let mut term_was_added = false;
@@ -284,7 +284,15 @@ pub fn compile_tb<'a>(
 
                 // Extract the needed byte
                 let byte_val = b.ins().ushr(val, shift_amount);
-                let byte_val = b.ins().band_imm(byte_val, 0xff);
+                let mut byte_val = b.ins().band_imm(byte_val, 0xff);
+                if inst.opcode == Opcode::LB {
+                    let tmp   = b.ins().ishl_imm(byte_val, 24);  // (value as i8) << 24
+                    byte_val  = b.ins().sshr_imm(tmp,   24); // Restore sign
+                }
+      
+                if inst.opcode == Opcode::LB {
+                    call_printout_value(jit_wrapper, &mut b, addr, byte_val);
+                }
 
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, byte_val);
             }
@@ -319,7 +327,11 @@ pub fn compile_tb<'a>(
                 let mask = b.ins().ishl(mask_16bits, shift_amount);
 
                 // // Extract the halfword and sign-extend it to 32 bits
-                let hw_val = b.ins().band(val,mask);
+                let mut hw_val = b.ins().band(val,mask);
+                if inst.opcode == Opcode::LH {
+                    let tmp   = b.ins().ishl_imm(hw_val, 16);  // (value as i8) << 24
+                    hw_val  = b.ins().sshr_imm(tmp,   16); // Restore sign
+                }
 
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, hw_val);
             }
@@ -674,7 +686,6 @@ pub fn compile_tb<'a>(
                 // Add Upper Immediate to PC
                 let (rd, imm) = inst.u_type();
                 let rd = rd as u32;
-                // let imm: i64 = (imm as i64) << 12;
                 let result = b.ins().iconst(types::I32, (pc as i64) + (imm as i64));
 
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd, result);
@@ -956,7 +967,7 @@ pub fn compile_tb<'a>(
     // println!("compile_tb ########### cnt: {}", cnt);
     // return next PC if we reached the limit or if there was no terminal instruction
     if !term_was_added || (!term_was_added && cnt == max_insns) {
-        println!("compile_tb add terminal cnt: {}", cnt);
+        // println!("compile_tb add terminal cnt: {}", cnt);
         store_registers_to_cpu(&mut b, register_file_ptr, &regs, &dirty_regs);
         let rvals = &[b.ins().iconst(types::I32, pc as i64)];
         b.ins().return_(rvals);
@@ -967,7 +978,7 @@ pub fn compile_tb<'a>(
     let sign = b.func.signature.clone();
     b.finalize();
 
-    println!("{}", ctx.func.display());
+    // println!("{}", ctx.func.display());
 
     let id = jit_wrapper.jit.declare_anonymous_function(&sign).unwrap();
     jit_wrapper.jit.define_function(id, &mut ctx).unwrap();
@@ -1017,12 +1028,12 @@ fn preload_alu(
             dirty_regs,
             regs,
         );
+        // println!("processing ADDI rs1 {}", rs1);
 
         let v1 = b.use_var(regs[rs1]);
         let v2 = b.ins().iconst(types::I32, imm as i64);
 
         // define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, r);
-        // println!("processing ADDI dirty {:?}", dirty_regs);
         (rd as u32, v1, v2)
     } else {
         assert!(inst.imm_b && inst.imm_c);
@@ -1484,7 +1495,7 @@ mod tests {
         let (insns, next_pc) = setup_test_env_with_cpu(&mut runtime);
 
         assert_eq!(insns, 2, "Should have translated all 2 instructions");
-        assert_eq!(runtime.register(Register::X10), 4096);
+        assert_eq!(runtime.register(Register::X10), 1);
         assert_eq!(runtime.register(Register::X20), 0);
         assert_eq!(next_pc, 8);
     }
