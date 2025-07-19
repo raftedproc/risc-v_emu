@@ -2,9 +2,11 @@
 
 use std::ops::{Index, IndexMut};
 
+use cranelift_module::Module;
 use serde::{Deserialize, Serialize};
 
 use crate::events::MemoryRecord;
+use crate::jitwrapper::JITWrapper;
 
 /// A register stores a 32-bit value used by operations.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -151,23 +153,28 @@ impl IndexMut<Register> for RegisterFile {
 }
 
 /// Register load helper
-pub extern "C" fn reg_store(registers: &mut RegisterFile, reg: u32, val: u32) {
-    registers.registers[reg as usize] = val;
-}
+// pub extern "C" fn reg_store(registers: &mut RegisterFile, reg: u32, val: u32) {
+//     registers.registers[reg as usize] = val;
+// }
+
+// /// Register load helper
+// pub extern "C" fn reg_load(registers: &mut RegisterFile, reg: u32) -> u32 {
+//     registers.registers[reg as usize]
+// }
 
 /// Register load helper
-pub extern "C" fn reg_load(registers: &mut RegisterFile, reg: u32) -> u32 {
-    registers.registers[reg as usize]
+pub extern "C" fn regs_printout(registers: &mut RegisterFile) {
+    print!("Registers: ");
+    for i in 0..Register::number_of_registers() {
+        print!("{} ", registers.registers[i]);
+    }
+    println!("");
 }
 
-use cranelift_codegen::ir::{types, AbiParam, Value};
-use cranelift_codegen::ir::{
-    ExtFuncData, ExternalName, InstBuilder, MemFlags, Signature, UserExternalNameRef,
-};
+use cranelift_codegen::ir::{types, Value};
+use cranelift_codegen::ir::{InstBuilder, MemFlags};
 use cranelift_frontend::FunctionBuilder;
 use cranelift_frontend::Variable;
-use cranelift_jit::JITModule;
-use cranelift_module::{FuncId, Linkage, Module};
 
 /// Helper function to load two registers if needed and not dirty
 pub fn load_two_regs(
@@ -212,7 +219,7 @@ pub fn define_rd_and_mark_dirty(
     let rd_as_idx: usize = rd.try_into().unwrap();
     b.def_var(regs[rd_as_idx], r);
     dirty_regs[rd_as_idx] = true;
-    // println!("define_rd_and_mark_dirty def rd {} {:?}", regs[rd_idx], dirty_regs);
+    // println!("define_rd_and_mark_dirty def rd {}", rd);
 }
 
 /// Helper function to load a register if needed and not dirty
@@ -256,7 +263,13 @@ pub fn store_registers_to_cpu(
     dirty_regs: &[bool],
 ) {
     // Only store registers that have been modified
-    for i in 0..32 {
+    if dirty_regs[0] {
+        let reg_val = b.ins().iconst(types::I32, 0);
+        let off = 0;
+        b.ins().store(MemFlags::new(), reg_val, register_file_ptr, 0);
+        // println!("Stored reg {} value back to CPU at offset {}", 0, off);
+    }
+    for i in 1..32 {
         // Skip registers that haven't been modified
         if !dirty_regs[i] {
             continue;
@@ -272,4 +285,14 @@ pub fn store_registers_to_cpu(
         b.ins().store(MemFlags::new(), reg_val, addr, 0);
         // println!("Stored reg {} value back to CPU at offset {}", i, off);
     }
+}
+
+pub fn call_regs_printout(
+    jit_wrapper: &mut JITWrapper,
+    b: &mut FunctionBuilder,
+    register_file_ptr: Value,
+) {
+    let func_id = jit_wrapper.helpers.regs_printout;
+    let func_ref = jit_wrapper.jit.declare_func_in_func(func_id, &mut b.func);
+    b.ins().call(func_ref, &[register_file_ptr]);
 }

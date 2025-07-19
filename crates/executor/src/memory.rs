@@ -1,14 +1,13 @@
 use std::ops::{Index, IndexMut};
 
-use cranelift_codegen::ir::{types, AbiParam, InstBuilder};
 use cranelift_codegen::ir::Value;
+use cranelift_codegen::ir::{types, AbiParam, InstBuilder};
 use cranelift_frontend::FunctionBuilder;
 use cranelift_jit::JITModule;
 use cranelift_module::{Linkage, Module};
 use memmap2::MmapMut;
 
 use crate::jitwrapper::JITWrapper;
-
 
 /// Holds anon mmap memory allocation.
 #[repr(C)]
@@ -21,13 +20,17 @@ pub struct Memory {
 // 2 << 30 : 4GB / 4
 impl Default for Memory {
     fn default() -> Self {
-        Memory { memory: MmapMut::map_anon(1 << 30).unwrap() }
+        Memory {
+            memory: MmapMut::map_anon(1 << 30).unwrap(),
+        }
     }
 }
 
 impl Clone for Memory {
     fn clone(&self) -> Self {
-        Self { memory: MmapMut::map_anon(1 << 30).unwrap() }
+        Self {
+            memory: MmapMut::map_anon(1 << 30).unwrap(),
+        }
     }
 }
 
@@ -49,29 +52,55 @@ impl Index<u32> for Memory {
     }
 }
 
-/// Memory load helper 
+/// Memory load helper
 pub extern "C" fn mem_load32(memory: &mut Memory, addr: u32) -> u32 {
-    println!("mem_load32 addr {}", addr);
-    println!("mem_load32 addr {} val {}", addr, memory[addr]);
+    // println!("mem_load32 addr {} ", addr);
     memory[addr]
 }
 
-/// Memory store helper 
+/// Memory store helper
 pub extern "C" fn mem_store32(memory: &mut Memory, addr: u32, val: u32) {
-    println!("mem_store32 addr {} val {}", addr, val);
+    // println!("mem_store32 addr {} val {}", addr, val);
     memory[addr] = val;
 }
 
+/// Memory dbug printout
+pub extern "C" fn printout_value(addr: u32, val: u32) {
+    println!("LB addr {} val {}", addr, val);
+}
+
 /// helper-ы для доступа к памяти: вызываем обычные Rust-функции
-pub fn call_mem_load_(jit_wrapper: &mut JITWrapper, b: &mut FunctionBuilder, memory_ptr: Value, addr: Value) -> Value {
+pub fn call_mem_load_(
+    jit_wrapper: &mut JITWrapper,
+    b: &mut FunctionBuilder,
+    memory_ptr: Value,
+    addr: Value,
+) -> Value {
     let func_id = jit_wrapper.helpers.mem_load32;
     let func_ref = jit_wrapper.jit.declare_func_in_func(func_id, &mut b.func);
     let call = b.ins().call(func_ref, &[memory_ptr, addr]);
     b.inst_results(call)[0]
 }
 
-pub fn call_mem_store_(jit_wrapper: &mut JITWrapper, b: &mut FunctionBuilder, memory_ptr: Value, addr: Value, val: Value) {
+pub fn call_mem_store_(
+    jit_wrapper: &mut JITWrapper,
+    b: &mut FunctionBuilder,
+    memory_ptr: Value,
+    addr: Value,
+    val: Value,
+) {
     let func_id = jit_wrapper.helpers.mem_store32;
     let func_ref = jit_wrapper.jit.declare_func_in_func(func_id, &mut b.func);
     b.ins().call(func_ref, &[memory_ptr, addr, val]);
+}
+
+pub fn call_printout_value(
+    jit_wrapper: &mut JITWrapper,
+    b: &mut FunctionBuilder,
+    addr: Value,
+    val: Value,
+) {
+    let func_id = jit_wrapper.helpers.printout_value;
+    let func_ref = jit_wrapper.jit.declare_func_in_func(func_id, &mut b.func);
+    b.ins().call(func_ref, &[addr, val]);
 }

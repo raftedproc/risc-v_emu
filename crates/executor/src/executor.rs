@@ -23,6 +23,7 @@ use crate::{
         SLOW_CACHE_MASK,
     },
     memory::Memory,
+    regs_printout,
     state::{ExecutionState, ForkState},
     syscalls::{default_syscall_map, Syscall, SyscallCode, SyscallContext},
     tb::try_to_compile_tb_and_populate_slow_cache,
@@ -562,6 +563,7 @@ impl<'a> Executor<'a> {
     #[inline]
     fn alu_rr(&mut self, instruction: &Instruction) -> (Register, u32, u32) {
         if !instruction.imm_c {
+            // println!("alu_rr 1 ");
             let (rd, rs1, rs2) = instruction.r_type();
             let c = self.rr(rs2, MemoryAccessPosition::C);
             let b = self.rr(rs1, MemoryAccessPosition::B);
@@ -569,8 +571,11 @@ impl<'a> Executor<'a> {
         } else if !instruction.imm_b && instruction.imm_c {
             let (rd, rs1, imm) = instruction.i_type();
             let (rd, b, c) = (rd, self.rr(rs1, MemoryAccessPosition::B), imm);
+            // println!("alu_rr 2 b {} c {}", b, c);
+
             (rd, b, c)
         } else {
+            // println!("alu_rr 3 ");
             assert!(instruction.imm_b && instruction.imm_c);
             let (rd, b, c) = (
                 Register::from_u32(instruction.op_a),
@@ -646,7 +651,7 @@ impl<'a> Executor<'a> {
     ) -> Result<(), ExecutionError> {
         println!("pc {} {:?}", self.state.pc, instruction);
         let mut next_pc = self.state.pc.wrapping_add(4);
-
+        regs_printout(&mut self.state.register_file);
         let rd: Register;
         let (a, b, c): (u32, u32, u32);
         let (addr, memory_read_value): (u32, u32);
@@ -708,6 +713,7 @@ impl<'a> Executor<'a> {
                 (rd, _, _, addr, memory_read_value) = self.load_rr(instruction);
                 let value = (memory_read_value).to_le_bytes()[(addr % 4) as usize];
                 a = ((value as i8) as i32) as u32;
+                println!("LB addr {} val {}", addr, a);
                 self.rw(rd, a);
             }
             Opcode::LH => {
@@ -842,6 +848,10 @@ impl<'a> Executor<'a> {
                 a = self.state.pc + 4;
                 self.rw(rd, a);
                 next_pc = b.wrapping_add(c);
+                // println!(
+                //     "JALR rd {} pc {} a {} b {} c {} res {}",
+                //     rd as u32, self.state.pc, a, b, c, next_pc
+                // );
                 //self.mark_jmp();
             }
 
@@ -850,7 +860,10 @@ impl<'a> Executor<'a> {
                 let (rd, imm) = instruction.u_type();
                 (b, _) = (imm, imm);
                 a = self.state.pc.wrapping_add(b);
-                // println!("AUIPC pc {} b {} res {}", self.state.pc, b, a);
+                // println!(
+                //     "AUIPC rd {} pc {} b {} res {}",
+                //     rd as u32, self.state.pc, b, a
+                // );
 
                 self.rw(rd, a);
             }
@@ -1222,7 +1235,7 @@ impl<'a> Executor<'a> {
         if let Some(tb) = tb_fast_cache_lookup(self.state.pc, self.unconstrained, fast_tb_cache) {
             return ExecutionMode::TB(tb);
         }
-        
+
         if let Some(tb) = tb_slow_cache_lookup(self.state.pc, self.unconstrained, slow_tb_cache) {
             populate_fast_cache(self.state.pc, self.unconstrained, tb, fast_tb_cache);
             return ExecutionMode::TB(tb);
@@ -1249,19 +1262,16 @@ impl<'a> Executor<'a> {
 
         let mut done = false;
         loop {
-        // while self.state.global_clk < 300 {
-            println!("!!!!!!!!!!!!!!!!!!");
+            // while self.state.global_clk < 300 {
             let mode =
                 self.tb_find_or_compile(&mut fast_tb_cache, &mut slow_tb_cache, &mut jit_wrapper);
             if let ExecutionMode::TB(tb) = mode {
-                println!("executing tb");
                 unsafe {
                     let tb_executor: extern "C" fn(*mut Memory, *mut RegisterFile) -> u32 =
                         std::mem::transmute(tb);
                     self.state.pc =
                         tb_executor(&mut self.state.memory_, &mut self.state.register_file);
                 }
-                println!("executed tb {}", self.state.pc);
 
                 let done = self.state.pc == 0
                     || self.state.pc.wrapping_sub(self.program.pc_base) >= done_inv;
@@ -1270,7 +1280,6 @@ impl<'a> Executor<'a> {
                     break;
                 }
             } else {
-                println!("executing cycle {}", self.state.pc);
                 // TODO remove this
 
                 if self.execute_cycle(done_inv, &mut rng)? {
