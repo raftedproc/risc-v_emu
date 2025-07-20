@@ -321,12 +321,12 @@ pub fn compile_tb<'a>(
 
                 // Load the 32-bit word containing the requested half-word
                 let val = call_mem_load_(jit_wrapper, &mut b, memory_ptr, addr);
-                let addr_shifted = b.ins().ushr(addr, one);
-                let higher_or_lower = b.ins().band(addr_shifted, one);
-                let shift_amount = b.ins().band(higher_or_lower, four);
+                let addr_shifted = b.ins().ushr_imm(addr, 1);
+                let higher_or_lower = b.ins().band_imm(addr_shifted, 1);
+                let shift_amount = b.ins().band_imm(higher_or_lower, 4);
                 let mask = b.ins().ishl(mask_16bits, shift_amount);
 
-                // // Extract the halfword and sign-extend it to 32 bits
+                // Extract the halfword and sign-extend it to 32 bits if needed
                 let mut hw_val = b.ins().band(val,mask);
                 if inst.opcode == Opcode::LH {
                     let tmp   = b.ins().ishl_imm(hw_val, 16);  // (value as i8) << 24
@@ -388,23 +388,36 @@ pub fn compile_tb<'a>(
                 call_mem_store_(jit_wrapper, &mut b, memory_ptr, aligned_addr, new_memory_word_value);
             }
             Opcode::SH => {
-                // let (rs1, rs2, imm) = inst.s_type();
-                // let (rs1, rs2) = load_two_regs(
-                //     &mut b,
-                //     register_file_ptr,
-                //     &regs,
-                //     &mut regs_read_or_changed_so_far,
-                //     &mut dirty_regs,
-                //     rs1 as u32,
-                //     rs2 as u32,
-                // );
+                let (rs1, rs2, imm) = inst.s_type();
+                let (rs1, rs2) = load_two_regs(
+                    &mut b,
+                    register_file_ptr,
+                    &regs,
+                    &mut regs_read_or_changed_so_far,
+                    &mut dirty_regs,
+                    rs1 as u32,
+                    rs2 as u32,
+                );
 
-                // let base = b.use_var(regs[rs2]);
-                // let addr = b.ins().iadd_imm(base, imm as i64);
-                // let val = b.use_var(regs[rs1]);
+                let mask_16bits = b.ins().iconst(types::I32, 0xFFFF);
 
-                // call_mem_store(jit, &mut b, memory_ptr, addr, val);
-                break;
+                let base = b.use_var(regs[rs2]);
+                let addr = b.ins().iadd_imm(base, imm as i64);
+                let addr_shifted = b.ins().ushr_imm(addr, 1);
+                let higher_or_lower = b.ins().band_imm(addr_shifted, 1);
+                let shift_amount = b.ins().band_imm(higher_or_lower, 4);
+
+                let val = b.use_var(regs[rs1]);
+                let masked_value = b.ins().band_imm(val, 0xFFFF);
+                let masked_and_shifted_value = b.ins().ishl(masked_value, shift_amount);
+
+                let memory_word_value = call_mem_load_(jit_wrapper, &mut b, memory_ptr, addr);
+               
+                let mask = b.ins().ishl(mask_16bits, shift_amount);
+                let new_memory_word_value = b.ins().band_not(memory_word_value, mask);
+                let new_memory_word_value = b.ins().iadd(new_memory_word_value, masked_and_shifted_value);
+
+                call_mem_store_(jit_wrapper, &mut b, memory_ptr, addr, new_memory_word_value);
             }
             Opcode::SW => {
                 let (rs1, rs2, imm) = inst.s_type();
@@ -914,14 +927,6 @@ pub fn compile_tb<'a>(
                 // Additional block for overflow case
                 // Jump either to div_block or directly to cont_block with −1.
                 b.ins().brif(is_zero, cont_block, &[BlockArg::Value(v1)], div_block, &[]);
-                
-                // ---------- overflow_block ----------
-                // b.switch_to_block(overflow_block);
-                // let min_int = b.ins().iconst(types::I32, -2147483648_i32 as i64); // 0x80000000
-                // let cmp_with_min = b.ins().icmp(IntCC::Equal, v1, min_int);
-                // let cmp_with_neg_one = b.ins().icmp(IntCC::Equal, v2, neg_one);
-                // let is_overflow = b.ins().band(cmp_with_min, cmp_with_neg_one);
-                // b.ins().brif(is_overflow, cont_block, &[zero], div_block, &[]);
                 
                 // ---------- div_block ----------
                 b.switch_to_block(div_block);
