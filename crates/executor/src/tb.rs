@@ -101,14 +101,17 @@ pub fn compile_tb<'a>(
 
     let mut pc = executor.state.pc;
     // println!("pc before the loop {}", pc);
-    let _ = call_regs_printout(jit_wrapper, &mut b, register_file_ptr);
+    if std::env::var("RISCV_EMULATOR_CHALLENGE_PRINTOUTS").is_ok() {
+        let _ = call_regs_printout(jit_wrapper, &mut b, register_file_ptr);
+    }
 
     let mut cnt = 0;
     let mut term_was_added = false;
     while cnt < max_insns && cnt < executor.program.instructions.len() {
-        // println!("cnt: {} pc {}", cnt, pc);
         let inst = executor.fetch_at(pc);
-        println!("pc {} {:?}", pc, inst);
+        if std::env::var("RISCV_EMULATOR_CHALLENGE_PRINTOUTS").is_ok() {
+            println!("pc {} {:?}", pc, inst);
+        }
         match inst.opcode {
             Opcode::ADD => {
                 let (rd, v1, v2) = preload_alu(
@@ -290,9 +293,9 @@ pub fn compile_tb<'a>(
                     byte_val  = b.ins().sshr_imm(tmp,   24); // Restore sign
                 }
       
-                if inst.opcode == Opcode::LB {
-                    call_printout_value(jit_wrapper, &mut b, addr, byte_val);
-                }
+                // if inst.opcode == Opcode::LB {
+                //     call_printout_value(jit_wrapper, &mut b, addr, byte_val);
+                // }
 
                 define_rd_and_mark_dirty(&mut b, &regs, &mut dirty_regs, rd as u32, byte_val);
             }

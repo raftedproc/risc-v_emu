@@ -649,9 +649,12 @@ impl<'a> Executor<'a> {
         instruction: &Instruction,
         rng: &mut Rand,
     ) -> Result<(), ExecutionError> {
-        println!("pc {} {:?}", self.state.pc, instruction);
+        if std::env::var("RISCV_EMULATOR_CHALLENGE_PRINTOUTS").is_ok() {
+            println!("pc {} {:?}", self.state.pc, instruction);
+            regs_printout(&mut self.state.register_file);
+        }
         let mut next_pc = self.state.pc.wrapping_add(4);
-        regs_printout(&mut self.state.register_file);
+
         let rd: Register;
         let (a, b, c): (u32, u32, u32);
         let (addr, memory_read_value): (u32, u32);
@@ -713,7 +716,7 @@ impl<'a> Executor<'a> {
                 (rd, _, _, addr, memory_read_value) = self.load_rr(instruction);
                 let value = (memory_read_value).to_le_bytes()[(addr % 4) as usize];
                 a = ((value as i8) as i32) as u32;
-                println!("LB addr {} val {}", addr, a);
+                // println!("LB addr {} val {}", addr, a);
                 self.rw(rd, a);
             }
             Opcode::LH => {
